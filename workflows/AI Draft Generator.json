@@ -1,0 +1,620 @@
+{
+  "name": "AI Draft Generator2",
+  "nodes": [
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/1HaC6qN7XO7kudIuWOKVSZYHbQFwJWVjf3IKN2GFmiqg/edit",
+          "__regex": "https:\\/\\/(?:drive|docs)\\.google\\.com(?:\\/.*|)\\/d\\/([0-9a-zA-Z\\-_]+)(?:\\/.*|)"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HaC6qN7XO7kudIuWOKVSZYHbQFwJWVjf3IKN2GFmiqg/edit#gid=0"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "specifyRangeA1"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1296,
+        160
+      ],
+      "id": "ff59b72f-e779-452e-a1e6-6f8cb9111793",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "c4GBoAyqZr3gzmI1",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -176,
+        160
+      ],
+      "id": "ece3a4a5-65e6-4c69-a5d0-3f14d581e535",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "53cmqhD5SjlB5iif",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputData = $input.first().json;\n\nreturn [{\n  json: {\n    model: \"llama-3.1-8b-instant\",\n    messages: [\n      {\n        role: \"system\",\n        content: \"You are an email assistant. Match the user's writing style exactly. Be natural and professional.\"\n      },\n      {\n        role: \"user\",\n        content: inputData.prompt\n      }\n    ],\n    max_tokens: 500,\n    temperature: 0.7\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        160
+      ],
+      "id": "b35573a5-4f9b-45a4-851b-18fdb6a4cd04",
+      "name": "Format for Groq"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get Gmail data from Filter Email node\nconst gmailData = $('Filter Email').first().json;\n\n// 🔥 DYNAMIC USER INFO - Will be extracted from Google Sheet\nlet myName = \"\"; \nlet myEmail = \"\";\nlet userDetected = false;\n\n// Extract email details (now clean from Filter Email)\nconst from = gmailData.from || 'Unknown Sender';\nconst subject = gmailData.subject || 'No subject';\nconst body = gmailData.body || 'No content available';\nconst threadId = gmailData.threadId || '';\n\n// Extract sender's first name (improved logic)\nlet senderFirstName = '';\nlet senderFullName = '';\n\nif (from.includes('<')) {\n  const namePart = from.split('<')[0].trim();\n  senderFullName = namePart;\n  senderFirstName = namePart.split(' ')[0];\n} else if (from.includes('@')) {\n  const emailPrefix = from.split('@')[0];\n  senderFirstName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);\n  senderFullName = senderFirstName;\n} else {\n  senderFirstName = from.split(' ')[0] || '';\n  senderFullName = from;\n}\n\n// 🆕 DEFAULT STYLE (if no sheet data available)\nlet avgWordCount = 80;\nlet avgSentenceLength = 15;\nlet avgFormality = 6;\nlet hasEmojis = false;\nlet hasContractions = true;\nlet startsWithGreeting = true;\nlet avgExclamations = 0;\nlet avgQuestions = 1;\nlet contentTypes = [];\nlet avgEmojiCount = 0;\nlet hasFormalClosing = true;\nlet sampleEmails = [];\nlet validRows = 0;\n\n// ✅ GET USER INFO AND STYLE FROM SHEET\ntry {\n  const styleRows = $('Get row(s) in sheet').all();\n  \n  if (styleRows && styleRows.length > 0) {\n    // 🔥 EXTRACT USER INFO FROM FIRST ROW\n    const firstRow = styleRows[0].json;\n    myEmail = firstRow['From Email'] || '';\n    \n    // Try to get name from 'From Name' column, fallback to email prefix\n    if (firstRow['From Name'] && firstRow['From Name'] !== myEmail) {\n      myName = firstRow['From Name'];\n    } else if (myEmail) {\n      // Extract name from email if 'From Name' is missing or same as email\n      myName = myEmail.split('@')[0].charAt(0).toUpperCase() + myEmail.split('@')[0].slice(1);\n    } else {\n      myName = \"User\"; // Ultimate fallback\n    }\n    \n    userDetected = true;\n    \n    let totalWordCount = 0;\n    let totalSentenceLength = 0;\n    let totalFormality = 0;\n    let totalExclamations = 0;\n    let totalQuestions = 0;\n    let totalEmojis = 0;\n    \n    styleRows.forEach(row => {\n      const wordCount = parseInt(row.json['Word Count']) || 0;\n      const sentenceLength = parseFloat(row.json['Avg Sentence Length']) || 0;\n      const formality = parseInt(row.json['Formality Score']) || 0;\n      \n      if (wordCount > 0) {\n        totalWordCount += wordCount;\n        totalSentenceLength += sentenceLength;\n        totalFormality += formality;\n        totalExclamations += parseInt(row.json['Exclamation Count']) || 0;\n        totalQuestions += parseInt(row.json['Question Count']) || 0;\n        totalEmojis += parseInt(row.json['Emoji Count']) || 0;\n        validRows++;\n        \n        // Boolean checks\n        if (row.json['Has Emojis'] === true || row.json['Has Emojis'] === 'TRUE') hasEmojis = true;\n        if (row.json['Uses Contractions'] === true || row.json['Uses Contractions'] === 'TRUE') hasContractions = true;\n        if (row.json['Starts With Greeting'] === true || row.json['Starts With Greeting'] === 'TRUE') startsWithGreeting = true;\n        if (row.json['Has Formal Closing'] === true || row.json['Has Formal Closing'] === 'TRUE') hasFormalClosing = true;\n        \n        // Content type tracking\n        const contentType = row.json['Content Type'];\n        if (contentType) contentTypes.push(contentType);\n        \n        // Sample emails (grab first 3)\n        if (sampleEmails.length < 3 && row.json['Preview']) {\n          sampleEmails.push(row.json['Preview'].substring(0, 250));\n        }\n      }\n    });\n    \n    // Calculate averages\n    if (validRows > 0) {\n      avgWordCount = Math.round(totalWordCount / validRows);\n      avgSentenceLength = parseFloat((totalSentenceLength / validRows).toFixed(1));\n      avgFormality = Math.round(totalFormality / validRows);\n      avgExclamations = parseFloat((totalExclamations / validRows).toFixed(1));\n      avgQuestions = parseFloat((totalQuestions / validRows).toFixed(1));\n      avgEmojiCount = parseFloat((totalEmojis / validRows).toFixed(1));\n    }\n    \n    console.log('✅ USER DETECTED:', myName, myEmail ? '(' + myEmail + ')' : '');\n    console.log('📊 Style analyzed from', validRows, 'sent emails');\n  }\n} catch (error) {\n  console.log('⚠️ Using default style - no sheet data available');\n  myName = \"User\";\n  myEmail = \"\";\n}\n\n// Fallback if user info wasn't extracted\nif (!myName || myName === \"\") {\n  myName = \"User\";\n}\n\n// Find most common content type\nlet mostCommonType = 'conversational';\nif (contentTypes.length > 0) {\n  mostCommonType = contentTypes.sort((a,b) =>\n    contentTypes.filter(v => v === a).length - contentTypes.filter(v => v === b).length\n  ).pop();\n}\n\n// 🔥 DETECT URGENCY & TONE FROM INCOMING EMAIL\nfunction analyzeIncomingEmail(subjectText, bodyText) {\n  const combined = (subjectText + ' ' + bodyText).toLowerCase();\n  \n  // Urgency markers\n  const urgentWords = ['urgent', 'asap', 'immediately', 'emergency', 'quickly', 'now', 'today', 'deadline'];\n  const isUrgent = urgentWords.some(word => combined.includes(word)) || subjectText.toLowerCase().includes('urgent');\n  \n  // Question detection\n  const hasQuestion = bodyText.includes('?') || combined.includes('could you') || combined.includes('can you') || combined.includes('would you');\n  \n  // Formality of sender\n  const casualMarkers = ['hi', 'hey', 'thanks', \"i'm\", \"don't\", \"can't\", '!'];\n  const formalMarkers = ['dear', 'regards', 'sincerely', 'kindly', 'would appreciate'];\n  \n  const casualCount = casualMarkers.filter(m => combined.includes(m)).length;\n  const formalCount = formalMarkers.filter(m => combined.includes(m)).length;\n  \n  let senderFormality = 'neutral';\n  if (formalCount > casualCount + 1) senderFormality = 'formal';\n  else if (casualCount > formalCount + 1) senderFormality = 'casual';\n  \n  // Emotional tone\n  const gratitudeWords = ['thank', 'thanks', 'appreciate', 'grateful'];\n  const complaintWords = ['disappointed', 'upset', 'problem', 'issue', 'concern', 'unfortunately', 'mistake'];\n  \n  const hasGratitude = gratitudeWords.some(w => combined.includes(w));\n  const hasComplaint = complaintWords.some(w => combined.includes(w));\n  \n  let emotionalTone = 'neutral';\n  if (hasGratitude) emotionalTone = 'grateful';\n  if (hasComplaint) emotionalTone = 'complaint';\n  \n  // Length (short = quick reply expected)\n  const wordCount = bodyText.split(/\\s+/).length;\n  const isShort = wordCount < 30;\n  \n  // 🆕 DELAY/PROBLEM DETECTION\n  const delayIndicators = ['late', 'delay', 'waiting', 'still waiting', 'overdue', 'missed deadline', 'where is', 'haven\\'t received', 'follow up', 'following up', 'reminder'];\n  const hasDelayMention = delayIndicators.some(indicator => combined.includes(indicator));\n  \n  return {\n    isUrgent,\n    hasQuestion,\n    senderFormality,\n    emotionalTone,\n    isShort,\n    wordCount,\n    hasDelayMention\n  };\n}\n\nconst emailContext = analyzeIncomingEmail(subject, body);\n\n// 🔥 UNIVERSAL LANGUAGE DETECTION - Works for ANY language\nconst incomingTextSample = (subject + ' ' + body).substring(0, 600);\n\nconst languageHint = `\n═══════════════════════════════════════════\n🚨 ABSOLUTE RULE: LANGUAGE MATCHING\n═══════════════════════════════════════════\n\nHERE IS THE EXACT TEXT FROM THE INCOMING EMAIL:\n\n\"${incomingTextSample}\"\n\nYOUR CRITICAL INSTRUCTION:\n\n1. READ the text above carefully\n2. IDENTIFY what language it is written in\n3. REPLY in that EXACT SAME language\n\nEXAMPLES:\n- If text is \"Can you help?\" → Reply in ENGLISH\n- If text is \"Peux-tu m'aider?\" → Reply in FRENCH  \n- If text is \"هل يمكنك المساعدة?\" → Reply in ARABIC\n- If text is \"¿Puedes ayudar?\" → Reply in SPANISH\n- If text is \"Kannst du helfen?\" → Reply in GERMAN\n\nThis rule applies to ALL languages: English, French, Arabic, Spanish, German, Chinese, Japanese, Hindi, Russian, Portuguese, Italian, Dutch, Korean, etc.\n\n⚠️ IGNORE the language of your writing style examples below - they are ONLY for style patterns (tone, formality, length)\n⚠️ The language you reply in MUST match the incoming email language ONLY\n\nThis is NON-NEGOTIABLE. Getting the language wrong makes your reply useless.`;\n\n// 🔥 BUILD ADAPTIVE, CONTEXT-AWARE PROMPT\nconst userIdentity = myEmail ? `${myName} (${myEmail})` : myName;\nconst userFirstName = myName.split(' ')[0] || myName;\n\nconst prompt = `You are ${userIdentity} replying to an email from ${senderFullName || senderFirstName || 'someone'}.\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📧 INCOMING EMAIL CONTEXT\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nFrom: ${from}\nSubject: \"${subject}\"\n\nMessage:\n\"${body}\"\n\nDETECTED CONTEXT:\n- Urgency: ${emailContext.isUrgent ? '🔴 HIGH - needs quick response' : '🟢 Normal'}\n- Type: ${emailContext.hasQuestion ? 'Question/Request' : 'Statement/Update'}\n- Sender's tone: ${emailContext.senderFormality} (${emailContext.emotionalTone})\n- Length: ${emailContext.isShort ? 'Short message - brief reply expected' : 'Detailed message'}\n- Delay mentioned: ${emailContext.hasDelayMention ? '⚠️ YES - acknowledge it' : '✅ NO - don\\'t invent problems'}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n✍️ YOUR AUTHENTIC WRITING STYLE\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${validRows > 0 ? `Analyzed from ${validRows} of your sent emails:` : 'Using professional default style:'}\n\nSTRUCTURE:\n- Typical length: ${avgWordCount} words (adapt based on their message)\n- Sentence flow: ~${avgSentenceLength} words/sentence\n- Content style: ${mostCommonType}\n\nTONE PROFILE:\n- Base formality: ${avgFormality}/10 (${avgFormality >= 7 ? 'professional' : avgFormality >= 4 ? 'balanced professional-casual' : 'friendly casual'})\n- Enthusiasm markers: ~${avgExclamations} exclamation marks per email\n- Engagement: ${avgQuestions} questions per email on average\n- Emojis: ${hasEmojis ? `Sometimes (avg ${avgEmojiCount}/email)` : 'Rarely/Never'}\n- Language style: ${hasContractions ? 'Natural contractions (I\\'m, don\\'t, can\\'t)' : 'Formal - avoids contractions'}\n\nOPENING/CLOSING HABITS:\n- Greetings: ${startsWithGreeting ? 'Usually greets first' : 'Sometimes skips greeting in quick replies'}\n- Sign-offs: ${hasFormalClosing ? 'Professional closings' : 'Casual closings'}\n\n${sampleEmails.length > 0 ? `\nACTUAL EXAMPLES OF YOUR WRITING (for STYLE only, NOT language):\n${sampleEmails.map((sample, i) => `\nExample ${i + 1}:\n\"${sample}...\"\n`).join('\\n')}\n\nNOTE: These examples show your writing STYLE (tone, formality, structure). \nThe LANGUAGE you reply in must match the incoming email, NOT these examples.\n` : ''}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🎯 YOUR TASK: WRITE A REPLY\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nYou are ${userFirstName}. Write your response to ${senderFirstName}'s email above.\n\n${languageHint}\n\n**ADAPT TO CONTEXT**:\n${emailContext.isUrgent ? '⚡ Be direct, clear, and action-oriented.' : ''}\n${emailContext.isShort ? '📝 Keep reply concise to match their brevity.' : ''}\n${emailContext.emotionalTone === 'complaint' ? '💙 Show empathy, acknowledge concern, offer solution.' : ''}\n${emailContext.emotionalTone === 'grateful' ? '😊 Acknowledge thanks warmly but briefly.' : ''}\n${emailContext.hasQuestion ? '❓ Answer their question directly first, then add any needed context.' : ''}\n\n**MATCH THEIR FORMALITY**:\n${emailContext.senderFormality === 'formal' ? '→ Professional but approachable' : ''}\n${emailContext.senderFormality === 'casual' ? '→ Relaxed tone while staying professional' : ''}\n${emailContext.senderFormality === 'neutral' ? '→ Balanced friendly-professional' : ''}\n\n**STRUCTURE YOUR REPLY**:\n1. ${startsWithGreeting ? `Greeting (e.g., \"Hi ${senderFirstName},\")` : 'Optional brief greeting'}\n2. Direct response to their question/message\n3. Any additional helpful information\n4. ${hasFormalClosing ? 'Professional closing' : 'Casual sign-off'}\n5. Your name: \"${userFirstName}\"\n\n**CRITICAL - YOU ARE RESPONDING**:\n- You are ${userFirstName} ANSWERING their email\n- NOT summarizing or quoting their message back\n- Be helpful and provide the information they need\n- Write as you would naturally respond\n\n**🚨 STAY GROUNDED IN REALITY**:\n${emailContext.hasDelayMention ? \n`- They mentioned a delay/waiting - acknowledge it appropriately\n- Apologize if there was actually a delay on your end` \n: \n`- DO NOT mention delays, apologies, or problems that weren't brought up\n- Simple requests deserve simple answers - no need to over-explain or apologize\n- Don't invent backstory or context that wasn't mentioned\n- \"Can you send X?\" → \"Sure, sending it now\" or \"Here you go\" (NOT \"Sorry for the delay\")\n- Keep it natural and direct`}\n\nOUTPUT: Write ONLY your reply message. Start with greeting, end with signature. NO subject line, NO \"Re:\", NO explanations.`;\n\nreturn [{\n  json: {\n    prompt: prompt,\n    // Metadata for debugging/logging\n    original_subject: subject,\n    original_from: from,\n    original_body: body,\n    thread_id: threadId,\n    sender_name: senderFirstName,\n    sender_full_name: senderFullName,\n    context: emailContext,\n    style_source: validRows > 0 ? `${validRows} analyzed emails` : 'default style',\n    detected_user_name: myName,\n    detected_user_email: myEmail,\n    user_detected: userDetected\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -624,
+        144
+      ],
+      "id": "0a4eb6a0-ac48-4c01-8755-a1b1cfaabdb1",
+      "name": "Build Personalized Prompt"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get ALL emails from Gmail Trigger\nconst items = $('Gmail Trigger').all();\n\n// Process each email and return results\nconst results = items.map(item => {\n  const data = item.json;\n  \n  // Extract email details - Gmail API format\n  const fromEmail = data.from?.value?.[0]?.address || '';\n  const fromName = data.from?.value?.[0]?.name || '';\n  const subject = data.subject || '';\n  const body = data.snippet || data.bodyPlainText || data.text || '';\n  const threadId = data.threadId || data.id || '';\n  const labelIds = data.labelIds || [];\n\n  // CHECK GMAIL LABEL - Skip promotional/social/updates\n  const hasPromotionalLabel = labelIds.some(label => \n    label.includes('CATEGORY_PROMOTIONS') || \n    label.includes('CATEGORY_SOCIAL') || \n    label.includes('CATEGORY_UPDATES') ||\n    label.includes('CATEGORY_FORUMS')\n  );\n\n  if (hasPromotionalLabel) {\n    console.log('❌ Skipping: Promotional category');\n    return {\n      json: {\n        action: 'SKIPPED',\n        reason: 'Gmail promotional/social/updates category',\n        from: fromEmail,\n        subject: subject\n      }\n    };\n  }\n\n  // Automated sender patterns to skip\n  const skipPatterns = [\n    'no-reply', 'noreply', 'donotreply',\n    'notifications@', 'notify@', 'alerts@',\n    'newsletter@', 'marketing@', 'updates@',\n    'support@github.com', 'noreply@github.com',\n    'info@groq.co', 'admin@'\n  ];\n\n  const shouldSkip = skipPatterns.some(pattern => \n    fromEmail.toLowerCase().includes(pattern)\n  );\n\n  // Promotional subject keywords\n  const promotionalSubjectKeywords = [\n    'unsubscribe', 'newsletter', 'promotion', 'deal',\n    'offer', 'discount', 'sale'\n  ];\n\n  const hasPromotionalSubject = promotionalSubjectKeywords.some(keyword =>\n    subject.toLowerCase().includes(keyword)\n  );\n\n  // Skip checks\n  if (!fromEmail || fromEmail === '') {\n    console.log('❌ Skipping: Missing sender');\n    return {\n      json: {\n        action: 'SKIPPED',\n        reason: 'Missing sender'\n      }\n    };\n  }\n\n  if (shouldSkip) {\n    console.log('❌ Skipping: Automated sender -', fromEmail);\n    return {\n      json: {\n        action: 'SKIPPED',\n        reason: 'Automated sender',\n        from: fromEmail\n      }\n    };\n  }\n\n  if (hasPromotionalSubject) {\n    console.log('❌ Skipping: Promotional subject');\n    return {\n      json: {\n        action: 'SKIPPED',\n        reason: 'Promotional subject',\n        subject: subject\n      }\n    };\n  }\n\n  // ✅ PASS THROUGH\n  console.log('✅ Processing email from:', fromEmail);\n  return {\n    json: {\n      action: 'CONTINUE',\n      threadId: threadId,\n      from: fromEmail,\n      fromName: fromName,\n      subject: subject,\n      body: body,\n      labelIds: labelIds\n    }\n  };\n});\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1072,
+        160
+      ],
+      "id": "69cafece-350b-4cb4-baf5-344901dc34e6",
+      "name": "Filter Email"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "bb68b682-916c-4773-988f-35114b42afe2",
+              "leftValue": "={{ $json.action }}",
+              "rightValue": "CONTINUE",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -848,
+        160
+      ],
+      "id": "2e76b134-09c1-4190-9695-53aef642a71b",
+      "name": "Check if Should Reply"
+    },
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "simple": false,
+        "filters": {
+          "labelIds": [
+            "INBOX"
+          ],
+          "readStatus": "unread"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1520,
+        160
+      ],
+      "id": "4cf7ce35-4d5e-4efe-b57d-fba240817e6d",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "VP06z6AGaNHm4HB6",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto = require('crypto');\n\n// 1. Get the payload (what we are logging)\n// If this is the \"Draft Created\" step, we map those fields.\n// If this is the \"Email Sent\" step, we map those.\nconst eventData = {\n  event: $('AI Draft Created').first().json.security_event || 'UNKNOWN_EVENT',\n  email_id: $('AI Draft Created').first().json.email_id || 'NO_ID',\n  timestamp: new Date().toISOString()\n};\n\nconst payload = JSON.stringify(eventData);\n\n// 2. Hash (SHA-256) - Creates a fingerprint of the event\nconst hash = crypto.createHash('sha256').update(payload).digest('hex');\n\n// 3. Sign (RSA) - Proves YOU (the server) created this log, not a hacker\n// PASTE YOUR PRIVATE KEY HERE FOR THE HACKATHON\nconst privateKey = `-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDY12wYt55fJFCm\nZpIDggfod11cgwfJhZdGOLDSauJ7XX0O8dnEmSdOapBdbWXmRNFl/Pb6uuVMdnRU\nMUtIfnw+Eu6C4BXoM5CuOovS9RDHzUbvUhJ66Pbm1TKPN6loFFzSTFUK0p2YO8hK\n5PMMlrd8nSiysK3cZ0XGf8pTLQe78mCwFaD9u7qkGW3OPpaTbqk7fePRMU+MLQxc\nypFzt3Xf+lsNvYkotZpuja9Q4T5l8m3p74XdWYTKGuSEtGHBaXPyfsdR6dCFAzi6\nbOulrfa+JuOU9EKUlaZgNY0GgXFxRGgLvs4nhZtZuWH+Wnn/D60NTwR1TiRD4JgU\nd/IIOYgVAgMBAAECggEAYTlhocl+jGkjciCOOl1sf0o5xZeIf85Sr+0ONyIubyLR\nRkihG/mReqLkHMfGxxK3ErPz5yKyWfDIotFBUH1J5qklYO/pUqYAKmZcuBciUXuU\nYQya9ZoLzh7sXvOVlPGAVthbzxD1EUNIwG/cHBpdpdVvYINASRDS47f7dwS7MYSd\njtz990k1ooWzKo9MY1p6FvgFh1fexULAe0HCJeMbJ3FCCzZOHF+8LFZnqU/yIVRh\nWJD0hH6gj/+0F+sSICENakq3nqILktzSL+sfgTcNgz+pQq+fQWeCPIrpivf7gEEq\n83lkgQA9NiMo5u5IpCZOX30DqIRwnSQZtVPDFFLuNwKBgQDvp0PTXsfdNZGGOJsm\n5Sr3UuP30RMZiQWaxi4dKfjdlk+elYqKUyJjtX/Y0XmjTPCJva+ssecTMlrRZP+K\nkWjtB0ou5TQl9YmRJWyG6AV5qaP++fO+Z/9f9gg0wiP7rRf5V8BUejhhLrCoJvUu\nE9RajXFO2Bu5SeDvDgw6ALhlXwKBgQDnodMvgMW+cft3+waIP1kKP+C70K1iXmQf\nBzwDLG42aVljJ1FOacXuQnFcPB/w2SbyU3ot5kJC1pwmT6biKbk0ieqij/zdKBlA\nLkDCTjwMIlcXy2ufghFORuaQEsM9NtKxIIjpDrNYDlMWaAppW4kDEsHKUWoCLIbf\nfCJeTGzzCwKBgHiH1nv7QmgGJh+sXpQMVDS5ssATnhiMqo3yOIUgc/L2QysOKPRy\n5Wvif99LU3MHIj8UcMNZYk9sVvLTahaGFZCIxw2Y50ZkHIEsok2jagWLhVia27Ua\n1vyrX+sw7SoKH3GfabLTGYH/Gognt84p2PaGBsPRuvfQqVlx5kJR1GvfAoGAeP39\nq02PfUhau7RjGB5G62Sshk6dksmNcOu9fEbkFwX2jCWIgfYcTrVkM3KwmIVFo8TZ\nCErDh9hEXnqyyGZU+M2lw16FDhyY+/5tE1H8abYyWhqG0B4H3iSI4O78DuipK568\nBUkJg1CQNB8KeTg4HGPa2EyonBQYK3rTFQDE1DsCgYBu+kt8irb7dlNi1A2IMHIx\nXSfKM+Ii7tJBg6srZy9QQSjdkoEyGesIzs/eme8p7g3r/90Bkg57UaGB3T5W7Efo\nesmuQ5zyjuSyY84kXGnQpu9/qpEfWCOsIQ6iCGThp4CEOLvAkknIrUfKH4LP2I9D\npkf0oDzEHajeTfGF10TtKg==\n-----END PRIVATE KEY-----`;\n\nconst signature = crypto.sign(\n  \"sha256\",\n  Buffer.from(payload),\n  privateKey\n);\n\nreturn {\n  json: {\n    log_entry: {\n      ...eventData,\n      content_hash: hash,\n      cryptographic_signature: signature.toString('base64')\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -80
+      ],
+      "id": "7fecc235-3550-4bcf-94a6-af72f69ff6bf",
+      "name": "Hash & Sign"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/116IbYeP6xN-aEmrdqL7E6PLkxfBGl7IHDnFsG0ksYm0/edit?gid=175218424#gid=175218424",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 175218424,
+          "mode": "list",
+          "cachedResultName": "Feuille 1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/116IbYeP6xN-aEmrdqL7E6PLkxfBGl7IHDnFsG0ksYm0/edit#gid=175218424"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event": "={{ $json.log_entry.event }}",
+            "email_id": "={{ $json.log_entry.email_id }}",
+            "timestamp": "={{ $json.log_entry.timestamp }}",
+            "hash": "={{ $json.log_entry.content_hash }}",
+            "signature": "={{ $json.log_entry.cryptographic_signature }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "event",
+              "displayName": "event",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email_id",
+              "displayName": "email_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hash",
+              "displayName": "hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "signature",
+              "displayName": "signature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        608,
+        -80
+      ],
+      "id": "4716919f-9e84-4a5f-946c-8a06ca8d5ec9",
+      "name": "log",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "c4GBoAyqZr3gzmI1",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{ \"security_event\": \"DRAFT_SAVED\", \"email_id\": \"{{ $json.id }}\", \"timestamp\": \"{{ $now }}\" }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        832,
+        160
+      ],
+      "id": "323a7ae7-a613-4eb2-8dfc-585a5d699a7f",
+      "name": "draft saved"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "{ \"security_event\": \"DRAFT_SAVED\", \"email_id\": \"{{ $json.id }}\", \"timestamp\": \"{{ $now }}\" }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        208,
+        -80
+      ],
+      "id": "e8ea90c9-1e69-4432-b170-93958e78ac98",
+      "name": "AI Draft Created"
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $('Filter Email').first().json.subject }}",
+        "message": "={{ $('decode html entities1').first().json.reply_body }}",
+        "options": {
+          "replyTo": "={{ $('Filter Email').first().json.from }}",
+          "threadId": "={{ $('Build Personalized Prompt').first().json.thread_id }}",
+          "sendTo": "={{ $('Filter Email').first().json.from }}"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        624,
+        160
+      ],
+      "id": "3da16b64-d006-4a61-a306-bb35e683535b",
+      "name": "Create a draft1",
+      "webhookId": "25bc864b-2bd7-4946-ad35-ea5de019b6b8",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "VP06z6AGaNHm4HB6",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// This code should go AFTER the Groq API call, before creating the draft\n// Place it in a new Code node after \"Format for Groq\" and before \"Create a draft\"\n\nconst groqResponse = $('HTTP Request').first().json;\n\n// Get the AI-generated reply text\nlet replyText = groqResponse.choices?.[0]?.message?.content || '';\n\n// 🔥 FIX: Decode HTML entities\nfunction decodeHTMLEntities(text) {\n  const entities = {\n    '&#39;': \"'\",\n    '&apos;': \"'\",\n    '&quot;': '\"',\n    '&amp;': '&',\n    '&lt;': '<',\n    '&gt;': '>',\n    '&nbsp;': ' ',\n    '&#x27;': \"'\",\n    '&#x2F;': '/',\n    '&#233;': 'é',\n    '&#232;': 'è',\n    '&#234;': 'ê',\n    '&#244;': 'ô',\n    '&#231;': 'ç',\n    '&#224;': 'à',\n    '&#249;': 'ù',\n    '&#226;': 'â',\n    '&#238;': 'î',\n    '&#251;': 'û',\n    '&#235;': 'ë',\n    '&#239;': 'ï',\n    '&#252;': 'ü',\n    '&#199;': 'Ç',\n    '&#201;': 'É',\n    '&#200;': 'È',\n    '&#202;': 'Ê',\n    '&#212;': 'Ô',\n    '&#192;': 'À',\n    '&#219;': 'Û',\n    '&#194;': 'Â',\n    '&#206;': 'Î'\n  };\n  \n  let decoded = text;\n  \n  // Replace all known entities\n  for (const [entity, char] of Object.entries(entities)) {\n    decoded = decoded.split(entity).join(char);\n  }\n  \n  // Catch any remaining numeric entities (&#xxx;)\n  decoded = decoded.replace(/&#(\\d+);/g, (match, dec) => {\n    return String.fromCharCode(dec);\n  });\n  \n  // Catch hex entities (&#xXX;)\n  decoded = decoded.replace(/&#x([0-9A-Fa-f]+);/g, (match, hex) => {\n    return String.fromCharCode(parseInt(hex, 16));\n  });\n  \n  return decoded;\n}\n\n// Clean the reply\nconst cleanedReply = decodeHTMLEntities(replyText);\n\n// Return the cleaned text for the draft\nreturn [{\n  json: {\n    reply_body: cleanedReply,\n    original_response: replyText,\n    thread_id: $('Build Personalized Prompt').first().json.thread_id || '',\n    subject: $('Build Personalized Prompt').first().json.original_subject || ''\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        160
+      ],
+      "id": "4e812084-671f-412b-9ad2-4fe18c3721be",
+      "name": "decode html entities1"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto = require('crypto');\n\n// 1. Get the payload (what we are logging)\n// If this is the \"Draft Created\" step, we map those fields.\n// If this is the \"Email Sent\" step, we map those.\nconst eventData = {\n  event: $('AI Draft Created').first().json.security_event || 'UNKNOWN_EVENT',\n  email_id: $('AI Draft Created').first().json.email_id || 'NO_ID',\n  timestamp: new Date().toISOString()\n};\n\nconst payload = JSON.stringify(eventData);\n\n// 2. Hash (SHA-256) - Creates a fingerprint of the event\nconst hash = crypto.createHash('sha256').update(payload).digest('hex');\n\n// 3. Sign (RSA) - Proves YOU (the server) created this log, not a hacker\n// PASTE YOUR PRIVATE KEY HERE FOR THE HACKATHON\nconst privateKey = `-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDY12wYt55fJFCm\nZpIDggfod11cgwfJhZdGOLDSauJ7XX0O8dnEmSdOapBdbWXmRNFl/Pb6uuVMdnRU\nMUtIfnw+Eu6C4BXoM5CuOovS9RDHzUbvUhJ66Pbm1TKPN6loFFzSTFUK0p2YO8hK\n5PMMlrd8nSiysK3cZ0XGf8pTLQe78mCwFaD9u7qkGW3OPpaTbqk7fePRMU+MLQxc\nypFzt3Xf+lsNvYkotZpuja9Q4T5l8m3p74XdWYTKGuSEtGHBaXPyfsdR6dCFAzi6\nbOulrfa+JuOU9EKUlaZgNY0GgXFxRGgLvs4nhZtZuWH+Wnn/D60NTwR1TiRD4JgU\nd/IIOYgVAgMBAAECggEAYTlhocl+jGkjciCOOl1sf0o5xZeIf85Sr+0ONyIubyLR\nRkihG/mReqLkHMfGxxK3ErPz5yKyWfDIotFBUH1J5qklYO/pUqYAKmZcuBciUXuU\nYQya9ZoLzh7sXvOVlPGAVthbzxD1EUNIwG/cHBpdpdVvYINASRDS47f7dwS7MYSd\njtz990k1ooWzKo9MY1p6FvgFh1fexULAe0HCJeMbJ3FCCzZOHF+8LFZnqU/yIVRh\nWJD0hH6gj/+0F+sSICENakq3nqILktzSL+sfgTcNgz+pQq+fQWeCPIrpivf7gEEq\n83lkgQA9NiMo5u5IpCZOX30DqIRwnSQZtVPDFFLuNwKBgQDvp0PTXsfdNZGGOJsm\n5Sr3UuP30RMZiQWaxi4dKfjdlk+elYqKUyJjtX/Y0XmjTPCJva+ssecTMlrRZP+K\nkWjtB0ou5TQl9YmRJWyG6AV5qaP++fO+Z/9f9gg0wiP7rRf5V8BUejhhLrCoJvUu\nE9RajXFO2Bu5SeDvDgw6ALhlXwKBgQDnodMvgMW+cft3+waIP1kKP+C70K1iXmQf\nBzwDLG42aVljJ1FOacXuQnFcPB/w2SbyU3ot5kJC1pwmT6biKbk0ieqij/zdKBlA\nLkDCTjwMIlcXy2ufghFORuaQEsM9NtKxIIjpDrNYDlMWaAppW4kDEsHKUWoCLIbf\nfCJeTGzzCwKBgHiH1nv7QmgGJh+sXpQMVDS5ssATnhiMqo3yOIUgc/L2QysOKPRy\n5Wvif99LU3MHIj8UcMNZYk9sVvLTahaGFZCIxw2Y50ZkHIEsok2jagWLhVia27Ua\n1vyrX+sw7SoKH3GfabLTGYH/Gognt84p2PaGBsPRuvfQqVlx5kJR1GvfAoGAeP39\nq02PfUhau7RjGB5G62Sshk6dksmNcOu9fEbkFwX2jCWIgfYcTrVkM3KwmIVFo8TZ\nCErDh9hEXnqyyGZU+M2lw16FDhyY+/5tE1H8abYyWhqG0B4H3iSI4O78DuipK568\nBUkJg1CQNB8KeTg4HGPa2EyonBQYK3rTFQDE1DsCgYBu+kt8irb7dlNi1A2IMHIx\nXSfKM+Ii7tJBg6srZy9QQSjdkoEyGesIzs/eme8p7g3r/90Bkg57UaGB3T5W7Efo\nesmuQ5zyjuSyY84kXGnQpu9/qpEfWCOsIQ6iCGThp4CEOLvAkknIrUfKH4LP2I9D\npkf0oDzEHajeTfGF10TtKg==\n-----END PRIVATE KEY-----`;\n\nconst signature = crypto.sign(\n  \"sha256\",\n  Buffer.from(payload),\n  privateKey\n);\n\nreturn {\n  json: {\n    log_entry: {\n      ...eventData,\n      content_hash: hash,\n      cryptographic_signature: signature.toString('base64')\n    }\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1040,
+        160
+      ],
+      "id": "c450abf6-10b9-4d80-bcf7-d0c40a4a91a0",
+      "name": "Hash & Sign1"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/116IbYeP6xN-aEmrdqL7E6PLkxfBGl7IHDnFsG0ksYm0/edit?gid=175218424#gid=175218424",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 175218424,
+          "mode": "list",
+          "cachedResultName": "Feuille 1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/116IbYeP6xN-aEmrdqL7E6PLkxfBGl7IHDnFsG0ksYm0/edit#gid=175218424"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "event": "={{ $json.log_entry.event }}",
+            "email_id": "={{ $json.log_entry.email_id }}",
+            "timestamp": "={{ $json.log_entry.timestamp }}",
+            "hash": "={{ $json.log_entry.content_hash }}",
+            "signature": "={{ $json.log_entry.cryptographic_signature }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "event",
+              "displayName": "event",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "email_id",
+              "displayName": "email_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hash",
+              "displayName": "hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "signature",
+              "displayName": "signature",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1232,
+        160
+      ],
+      "id": "a70b5aca-c35a-4e36-b923-ef2ef015d148",
+      "name": "log1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "c4GBoAyqZr3gzmI1",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "Filter Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format for Groq": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Personalized Prompt": {
+      "main": [
+        [
+          {
+            "node": "Format for Groq",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "AI Draft Created",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "decode html entities1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Email": {
+      "main": [
+        [
+          {
+            "node": "Check if Should Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check if Should Reply": {
+      "main": [
+        [
+          {
+            "node": "Build Personalized Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hash & Sign": {
+      "main": [
+        [
+          {
+            "node": "log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "draft saved": {
+      "main": [
+        [
+          {
+            "node": "Hash & Sign1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Draft Created": {
+      "main": [
+        []
+      ]
+    },
+    "Create a draft1": {
+      "main": [
+        [
+          {
+            "node": "draft saved",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "decode html entities1": {
+      "main": [
+        [
+          {
+            "node": "Create a draft1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hash & Sign1": {
+      "main": [
+        [
+          {
+            "node": "log1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "80e10fd1-6c7f-4561-88c1-917c77880afe",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "606f1cf300e06a964fde959ec8749d5a888510acc2a661d8821b93dfa23f3eb9"
+  },
+  "id": "lzF5bIQ4EPeJ6U0Pdj8WT",
+  "tags": []
+}

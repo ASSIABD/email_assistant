@@ -1,0 +1,341 @@
+{
+  "name": "Style Extraction2",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "97ce4dc0-c0f3-4ea5-94fa-f3b5006bb8b8",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 10,
+        "simple": false,
+        "filters": {
+          "labelIds": [
+            "SENT"
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        208,
+        0
+      ],
+      "id": "34a9ca2c-11e2-4030-873c-5d453fd4556b",
+      "name": "Get many messages",
+      "webhookId": "24942cb5-cd74-453b-9907-625df15ae356",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "VP06z6AGaNHm4HB6",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const emails = $input.all();\nconst extractedData = [];\n\nfor (let i = 0; i < emails.length; i++) {\n  const email = emails[i].json;\n  \n  let body = email.text || email.snippet || '';\n  \n  if (!body && email.textAsHtml) {\n    body = email.textAsHtml;\n  }\n  \n  // Clean HTML\n  if (body.includes('<') && body.includes('>')) {\n    body = body.replace(/<[^>]*>/g, ' ')\n      .replace(/&nbsp;/g, ' ')\n      .replace(/&amp;/g, '&')\n      .replace(/&lt;/g, '<')\n      .replace(/&gt;/g, '>')\n      .replace(/\\s+/g, ' ')\n      .trim();\n  }\n  \n  // Remove quoted replies\n  body = body.split('\\n')\n    .filter(line => !line.trim().startsWith('>'))\n    .join('\\n');\n  \n  body = body.replace(/On .+ wrote:/gi, '');\n  body = body.replace(/reacted via Gmail/gi, '');\n  body = body.replace(/---------- Forwarded message ---------/gi, '');\n  \n  // Remove signatures\n  const signatureMarkers = [\n    /\\n--\\s*\\n/,\n    /\\n_{3,}\\n/,\n    /\\nSent from /i,\n    /\\nGet Outlook for /i,\n    /\\nBest regards/i,\n    /\\nThanks,/i,\n    /\\nCheers/i\n  ];\n  \n  for (const marker of signatureMarkers) {\n    const parts = body.split(marker);\n    if (parts.length > 1) {\n      body = parts[0].trim();\n      break;\n    }\n  }\n  \n  body = body.replace(/\\n{3,}/g, '\\n\\n')\n    .replace(/[ \\t]+/g, ' ')\n    .trim();\n  \n  // Skip if empty after cleaning\n  if (body.length === 0) {\n    continue;\n  }\n  \n  const subject = email.subject || '(No subject)';\n  const date = email.date || email.receivedDateTime || '';\n  const snippet = body.substring(0, 150) + (body.length > 150 ? '...' : '');\n  \n  // 🔥 IMPROVED: Extract sender info (works for any Gmail account)\n  let fromAddress = '';\n  let fromName = '';\n  \n  if (email.from && email.from.value && email.from.value[0]) {\n    // Gmail API format\n    fromAddress = email.from.value[0].address || '';\n    fromName = email.from.value[0].name || '';\n  } else if (email.from && typeof email.from === 'string') {\n    // Simple string format\n    fromAddress = email.from;\n    // Try to extract name if format is \"Name <email@example.com>\"\n    if (fromAddress.includes('<')) {\n      const match = fromAddress.match(/^(.+?)\\s*<(.+?)>$/);\n      if (match) {\n        fromName = match[1].trim();\n        fromAddress = match[2].trim();\n      }\n    }\n  }\n  \n  // If no name extracted, use email prefix as name\n  if (!fromName && fromAddress) {\n    fromName = fromAddress.split('@')[0];\n  }\n  \n  extractedData.push({\n    emailNumber: i + 1,\n    emailId: email.id || email.messageId || `email_${i}`,\n    subject: subject,\n    body: body,\n    snippet: snippet,\n    date: date,\n    from: fromAddress,\n    fromName: fromName\n  });\n}\n\n// Return in n8n format\nreturn extractedData.map(item => ({ json: item }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        0
+      ],
+      "id": "90e42bfd-ce4d-4434-af94-6ddb868f3d22",
+      "name": "Extract Content"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all emails from previous node\nconst emails = $input.all();\nconst cleanedEmails = [];\n\nfor (const item of emails) {\n  // Properly access the json object\n  const email = item.json;\n  \n  // Check if email object exists and has body\n  if (!email || !email.body || typeof email.body !== 'string' || email.body.trim().length === 0) {\n    // Log skipped email for debugging\n    cleanedEmails.push({\n      json: {  //  Wrap in json object\n        emailId: email?.emailId || 'unknown',\n        subject: email?.subject || 'No subject',\n        error: 'Empty or invalid body',\n        skipped: true,\n        originalBodyLength: email?.body ? email.body.length : 0\n      }\n    });\n    continue;\n  }\n  \n  // Clean the body text (preserve content, just remove noise)\n  let cleanBody = email.body\n    // Remove common email artifacts\n    .replace(/reacted via Gmail/gi, '')\n    .replace(/\\[cid:.*?\\]/g, '') // Remove image references\n    .replace(/\\r\\n/g, '\\n') // Normalize line breaks\n    // Clean up excessive whitespace\n    .replace(/\\n{3,}/g, '\\n\\n') // Max 2 line breaks\n    .replace(/[ \\t]+/g, ' ') // Single spaces\n    .trim();\n  \n  // Split on common signature markers (but keep everything before)\n  const signatureMarkers = [\n    /\\n--\\s*\\n/,\n    /\\n_{3,}\\n/,\n    /\\nSent from /i,\n    /\\nGet Outlook for /i,\n    /\\nBest regards/i,\n    /\\nThanks/i\n  ];\n  \n  for (const marker of signatureMarkers) {\n    const parts = cleanBody.split(marker);\n    if (parts.length > 1) {\n      cleanBody = parts[0].trim();\n    }\n  }\n  \n  // Basic measurements\n  const wordArray = cleanBody.split(/\\s+/).filter(w => w.length > 0);\n  const wordCount = wordArray.length;\n  \n  // Better empty handling\n  if (wordCount === 0) {\n    cleanedEmails.push({\n      json: {  // Wrap in json object\n        emailId: email.emailId,\n        subject: email.subject,\n        error: 'Empty after cleaning',\n        skipped: true,\n        originalBody: email.body.substring(0, 100)\n      }\n    });\n    continue;\n  }\n  \n  // Character metrics\n  const totalChars = cleanBody.length;\n  const totalCharsNoSpaces = cleanBody.replace(/\\s/g, '').length;\n  const avgWordLength = wordCount > 0 ? totalCharsNoSpaces / wordCount : 0;\n  \n  // Sentence analysis\n  const sentences = cleanBody.match(/[.!?]+(?=\\s|$)/g) || [];\n  const sentenceCount = sentences.length || 1;\n  const avgSentenceLength = wordCount / sentenceCount;\n  \n  // Punctuation patterns\n  const exclamationCount = (cleanBody.match(/!/g) || []).length;\n  const questionCount = (cleanBody.match(/\\?/g) || []).length;\n  const periodCount = (cleanBody.match(/\\./g) || []).length;\n  const commaCount = (cleanBody.match(/,/g) || []).length;\n  \n  // Emoji detection (all emoji ranges)\n  const emojiMatches = cleanBody.match(/[\\u{1F300}-\\u{1F9FF}]|[\\u{2600}-\\u{26FF}]|[\\u{2700}-\\u{27BF}]/gu) || [];\n  const emojiCount = emojiMatches.length;\n  \n  // Greeting patterns (multiple languages)\n  const greetingPatterns = /^(hi|hello|hey|dear|greetings|good morning|good afternoon|good evening|bonjour|salut|hola|ciao)/i;\n  const startsWithGreeting = greetingPatterns.test(cleanBody);\n  \n  // Closing patterns (multiple languages)\n  const closingPatterns = /(best regards|sincerely|regards|cheers|thanks|thank you|yours|cordially|respectfully|faithfully|cordialement|salutations)/i;\n  const hasFormalClosing = closingPatterns.test(cleanBody);\n  \n  // Casual language indicators\n  const contractionsPattern = /(i'm|you're|we're|they're|it's|don't|can't|won't|shouldn't|wouldn't|couldn't|isn't|aren't|wasn't|weren't|haven't|hasn't|hadn't)/i;\n  const usesContractions = contractionsPattern.test(cleanBody);\n  \n  // Uppercase analysis (shouting detection)\n  const uppercaseWords = cleanBody.match(/\\b[A-Z]{2,}\\b/g) || [];\n  const uppercaseRatio = uppercaseWords.length / (wordCount || 1);\n  \n  // Number detection\n  const numberCount = (cleanBody.match(/\\b\\d+\\b/g) || []).length;\n  \n  // URL detection\n  const urlCount = (cleanBody.match(/https?:\\/\\/[^\\s]+/g) || []).length;\n  \n  // Calculate formality score (0-10)\n  let formalityScore = 5; // neutral baseline\n  \n  if (hasFormalClosing) formalityScore += 2;\n  if (avgWordLength > 6) formalityScore += 1;\n  if (avgWordLength > 7) formalityScore += 1;\n  if (avgSentenceLength > 20) formalityScore += 1;\n  \n  if (usesContractions) formalityScore -= 1;\n  if (emojiCount > 0) formalityScore -= 2;\n  if (exclamationCount > 2) formalityScore -= 1;\n  if (uppercaseRatio > 0.1) formalityScore -= 1;\n  \n  formalityScore = Math.max(0, Math.min(10, formalityScore));\n  \n  // Determine content type\n  let contentType = 'conversational';\n  if (numberCount > wordCount * 0.3) contentType = 'data-heavy';\n  else if (urlCount > 2) contentType = 'informational';\n  else if (formalityScore >= 7) contentType = 'formal';\n  else if (formalityScore <= 3) contentType = 'casual';\n  \n\n// Determine tone\nlet tone = 'neutral';\nif (exclamationCount > 2 && emojiCount > 0) tone = 'enthusiastic';\nelse if (questionCount > exclamationCount * 2) tone = 'inquisitive';\nelse if (formalityScore >= 7) tone = 'professional';\nelse if (formalityScore <= 3 && usesContractions) tone = 'friendly';\n  // Return items with proper n8n structure\n  cleanedEmails.push({\n    json: {\n      // Identity\n      emailId: email.emailId,\n      subject: email.subject,\n      date: email.date,\n      from: email.from || email.fromAddress,\n      to: email.to || email.toAddress,\n      \n      // Content\n      cleanBody: cleanBody,\n      preview: cleanBody.substring(0, 150) + (cleanBody.length > 150 ? '...' : ''),\n      \n      // Basic metrics\n      wordCount: wordCount,\n      charCount: totalChars,\n      charCountNoSpaces: totalCharsNoSpaces,\n      \n      // Word analysis\n      avgWordLength: Math.round(avgWordLength * 10) / 10,\n      \n      // Sentence analysis\n      sentenceCount: sentenceCount,\n      avgSentenceLength: Math.round(avgSentenceLength * 10) / 10,\n      \n      // Punctuation\n      exclamationCount: exclamationCount,\n      questionCount: questionCount,\n      periodCount: periodCount,\n      commaCount: commaCount,\n      \n      // Style indicators\n      emojiCount: emojiCount,\n      hasEmojis: emojiCount > 0,\n      startsWithGreeting: startsWithGreeting,\n      hasFormalClosing: hasFormalClosing,\n      usesContractions: usesContractions,\n      uppercaseRatio: Math.round(uppercaseRatio * 100) / 100,\n      \n      // Content features\n      numberCount: numberCount,\n      urlCount: urlCount,\n      \n      // Calculated scores\n      formalityScore: formalityScore,\n      contentType: contentType,\n      \n      // Debugging\n      skipped: false\n    }\n  });\n}\n\nreturn cleanedEmails;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        48
+      ],
+      "id": "f5b5ee2a-2a27-494e-b1a5-82f1861b3f9c",
+      "name": "Analyze Writing Style"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/1HaC6qN7XO7kudIuWOKVSZYHbQFwJWVjf3IKN2GFmiqg/edit?usp=sharing",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1HaC6qN7XO7kudIuWOKVSZYHbQFwJWVjf3IKN2GFmiqg/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now.toISO() }}",
+            "Email ID": "={{ $json.emailId }}",
+            "Subject": "={{ $json.subject }}",
+            "Date Sent": "={{ $json.date }}",
+            "Word Count": "={{ $json.wordCount }}",
+            "Avg Word Length": "={{ $json.avgWordLength }}",
+            "Sentence Count": "={{ $json.sentenceCount }}",
+            "Avg Sentence Length": "={{ $json.avgSentenceLength }}",
+            "Formality Score": "={{ $json.formalityScore }}",
+            "Content Type": "={{ $json.contentType }}",
+            "Has Emojis": "={{ $json.hasEmojis }}",
+            "Uses Contractions": "={{ $json.usesContractions }}",
+            "Starts With Greeting": "={{ $json.startsWithGreeting }}",
+            "Has Formal Closing": "={{ $json.hasFormalClosing }}",
+            "From Name": "={{ $json.fromName || $json.from }}",
+            "From Email": "={{ $json.fromAddress || $json.from }}",
+            "Preview": "={{ $json.preview }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Timestamp",
+              "displayName": "Timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email ID",
+              "displayName": "Email ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Subject",
+              "displayName": "Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Date Sent",
+              "displayName": "Date Sent",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Word Count",
+              "displayName": "Word Count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Avg Word Length",
+              "displayName": "Avg Word Length",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Sentence Count",
+              "displayName": "Sentence Count",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Avg Sentence Length",
+              "displayName": "Avg Sentence Length",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Formality Score",
+              "displayName": "Formality Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Content Type",
+              "displayName": "Content Type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Has Emojis",
+              "displayName": "Has Emojis",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Uses Contractions",
+              "displayName": "Uses Contractions",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Starts With Greeting",
+              "displayName": "Starts With Greeting",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Has Formal Closing",
+              "displayName": "Has Formal Closing",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "From Name",
+              "displayName": "From Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "From Email",
+              "displayName": "From Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Preview",
+              "displayName": "Preview",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        832,
+        64
+      ],
+      "id": "3343e41c-81bd-469b-8cb8-0298c6a8b223",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "c4GBoAyqZr3gzmI1",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get many messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many messages": {
+      "main": [
+        [
+          {
+            "node": "Extract Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Content": {
+      "main": [
+        [
+          {
+            "node": "Analyze Writing Style",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Writing Style": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "4c96be18-3469-466e-a280-f90960d42369",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "606f1cf300e06a964fde959ec8749d5a888510acc2a661d8821b93dfa23f3eb9"
+  },
+  "id": "z167u1e7Nel5PLVo-JOy_",
+  "tags": []
+}
