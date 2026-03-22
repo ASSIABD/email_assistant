@@ -7,7 +7,7 @@ Authors: Assia Bendaou & Douae Annasri | ENSIASD Taroudant
 
 ## What is it?
 
-An AI email assistant that learns how **you** write and drafts replies in your exact voice — not a generic AI voice. Built with a multi-layer security pipeline and strict human-in-the-loop control.
+An AI email assistant that learns how **you** write and drafts replies in your exact voice, not a generic AI voice. Built with a multi-layer security pipeline and strict human-in-the-loop control.
 
 ---
 
