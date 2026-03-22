@@ -1,0 +1,453 @@
+{
+  "name": "AI Email Assistant — Style Learner + Draft Generator",
+  "description": "Two workflows: (1) Style Learner runs on schedule to build your writing profile. (2) Draft Generator triggers on new emails and replies in your voice.",
+  "version": "2.0.0",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 25,
+        "simple": false,
+        "filters": {
+          "labelIds": ["SENT"]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [-224, 128],
+      "id": "7e7d5625-314b-4c7a-a548-db4e43e9e77f",
+      "name": "Get many messages",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const emails = $input.all();\nconst extractedData = [];\n\nfor (let i = 0; i < emails.length; i++) {\n  const email = emails[i].json;\n  \n  let body = email.text || email.snippet || '';\n  \n  if (!body && email.textAsHtml) {\n    body = email.textAsHtml;\n  }\n  \n  if (body.includes('<') && body.includes('>')) {\n    body = body.replace(/<[^>]*>/g, ' ')\n      .replace(/&nbsp;/g, ' ')\n      .replace(/&amp;/g, '&')\n      .replace(/&lt;/g, '<')\n      .replace(/&gt;/g, '>')\n      .replace(/\\s+/g, ' ')\n      .trim();\n  }\n  \n  body = body.split('\\n')\n    .filter(line => !line.trim().startsWith('>'))\n    .join('\\n');\n  \n  body = body.replace(/On .+ wrote:/gi, '');\n  body = body.replace(/reacted via Gmail/gi, '');\n  body = body.replace(/---------- Forwarded message ---------/gi, '');\n  \n  const signatureMarkers = [\n    /\\n--\\s*\\n/,\n    /\\n_{3,}\\n/,\n    /\\nSent from /i,\n    /\\nGet Outlook for /i,\n    /\\nBest regards/i,\n    /\\nThanks,/i,\n    /\\nCheers/i\n  ];\n  \n  for (const marker of signatureMarkers) {\n    const parts = body.split(marker);\n    if (parts.length > 1) {\n      body = parts[0].trim();\n      break;\n    }\n  }\n  \n  body = body.replace(/\\n{3,}/g, '\\n\\n')\n    .replace(/[ \\t]+/g, ' ')\n    .trim();\n  \n  if (body.length === 0) continue;\n  \n  const subject = email.subject || '(No subject)';\n  const date = email.date || email.receivedDateTime || '';\n  const snippet = body.substring(0, 150) + (body.length > 150 ? '...' : '');\n  \n  let fromAddress = '';\n  let fromName = '';\n  \n  if (email.from && email.from.value && email.from.value[0]) {\n    fromAddress = email.from.value[0].address || '';\n    fromName = email.from.value[0].name || '';\n  } else if (email.from && typeof email.from === 'string') {\n    fromAddress = email.from;\n    if (fromAddress.includes('<')) {\n      const match = fromAddress.match(/^(.+?)\\s*<(.+?)>$/);\n      if (match) {\n        fromName = match[1].trim();\n        fromAddress = match[2].trim();\n      }\n    }\n  }\n  \n  if (!fromName && fromAddress) {\n    fromName = fromAddress.split('@')[0];\n  }\n  \n  extractedData.push({\n    emailNumber: i + 1,\n    emailId: email.id || email.messageId || `email_${i}`,\n    subject,\n    body,\n    snippet,\n    date,\n    from: fromAddress,\n    fromName\n  });\n}\n\nreturn extractedData.map(item => ({ json: item }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [48, 240],
+      "id": "202376ff-6056-4a23-9543-a2fcfbc61d3d",
+      "name": "Extract Content"
+    },
+    {
+      "parameters": {
+        "jsCode": "const emails = $input.all();\nconst cleanedEmails = [];\n\nfor (const item of emails) {\n  const email = item.json;\n  \n  if (!email || !email.body || typeof email.body !== 'string' || email.body.trim().length === 0) {\n    cleanedEmails.push({ json: { emailId: email?.emailId || 'unknown', subject: email?.subject || 'No subject', error: 'Empty or invalid body', skipped: true } });\n    continue;\n  }\n  \n  let cleanBody = email.body\n    .replace(/reacted via Gmail/gi, '')\n    .replace(/\\[cid:.*?\\]/g, '')\n    .replace(/\\r\\n/g, '\\n')\n    .replace(/\\n{3,}/g, '\\n\\n')\n    .replace(/[ \\t]+/g, ' ')\n    .trim();\n  \n  const signatureMarkers = [/\\n--\\s*\\n/, /\\n_{3,}\\n/, /\\nSent from /i, /\\nGet Outlook for /i, /\\nBest regards/i, /\\nThanks/i];\n  for (const marker of signatureMarkers) {\n    const parts = cleanBody.split(marker);\n    if (parts.length > 1) cleanBody = parts[0].trim();\n  }\n  \n  const wordArray = cleanBody.split(/\\s+/).filter(w => w.length > 0);\n  const wordCount = wordArray.length;\n  \n  if (wordCount === 0) {\n    cleanedEmails.push({ json: { emailId: email.emailId, subject: email.subject, error: 'Empty after cleaning', skipped: true } });\n    continue;\n  }\n  \n  const totalCharsNoSpaces = cleanBody.replace(/\\s/g, '').length;\n  const avgWordLength = totalCharsNoSpaces / wordCount;\n  const sentences = cleanBody.match(/[.!?]+(?=\\s|$)/g) || [];\n  const sentenceCount = sentences.length || 1;\n  const avgSentenceLength = wordCount / sentenceCount;\n  const exclamationCount = (cleanBody.match(/!/g) || []).length;\n  const questionCount = (cleanBody.match(/\\?/g) || []).length;\n  const emojiMatches = cleanBody.match(/[\\u{1F300}-\\u{1F9FF}]|[\\u{2600}-\\u{26FF}]/gu) || [];\n  const emojiCount = emojiMatches.length;\n  const startsWithGreeting = /^(hi|hello|hey|dear|bonjour|salut|hola)/i.test(cleanBody);\n  const hasFormalClosing = /(best regards|sincerely|regards|cordialement|salutations)/i.test(cleanBody);\n  const usesContractions = /(i'm|you're|don't|can't|won't)/i.test(cleanBody);\n  const uppercaseWords = cleanBody.match(/\\b[A-Z]{2,}\\b/g) || [];\n  const uppercaseRatio = uppercaseWords.length / (wordCount || 1);\n  const numberCount = (cleanBody.match(/\\b\\d+\\b/g) || []).length;\n  const urlCount = (cleanBody.match(/https?:\\/\\/[^\\s]+/g) || []).length;\n  \n  let formalityScore = 5;\n  if (hasFormalClosing) formalityScore += 2;\n  if (avgWordLength > 6) formalityScore += 1;\n  if (avgSentenceLength > 20) formalityScore += 1;\n  if (usesContractions) formalityScore -= 1;\n  if (emojiCount > 0) formalityScore -= 2;\n  if (exclamationCount > 2) formalityScore -= 1;\n  formalityScore = Math.max(0, Math.min(10, formalityScore));\n  \n  let contentType = 'conversational';\n  if (numberCount > wordCount * 0.3) contentType = 'data-heavy';\n  else if (urlCount > 2) contentType = 'informational';\n  else if (formalityScore >= 7) contentType = 'formal';\n  else if (formalityScore <= 3) contentType = 'casual';\n  \n  let tone = 'neutral';\n  if (exclamationCount > 2 && emojiCount > 0) tone = 'enthusiastic';\n  else if (questionCount > exclamationCount * 2) tone = 'inquisitive';\n  else if (formalityScore >= 7) tone = 'professional';\n  else if (formalityScore <= 3 && usesContractions) tone = 'friendly';\n  \n  cleanedEmails.push({\n    json: {\n      emailId: email.emailId, subject: email.subject, date: email.date,\n      from: email.from, cleanBody,\n      preview: cleanBody.substring(0, 150) + (cleanBody.length > 150 ? '...' : ''),\n      wordCount, avgWordLength: Math.round(avgWordLength * 10) / 10,\n      sentenceCount, avgSentenceLength: Math.round(avgSentenceLength * 10) / 10,\n      exclamationCount, questionCount,\n      emojiCount, hasEmojis: emojiCount > 0,\n      startsWithGreeting, hasFormalClosing, usesContractions,\n      uppercaseRatio: Math.round(uppercaseRatio * 100) / 100,\n      numberCount, urlCount, formalityScore, contentType, tone, skipped: false\n    }\n  });\n}\n\nreturn cleanedEmails;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [256, 112],
+      "id": "3f05ba7d-71cb-4588-9f31-b00e5f3addb9",
+      "name": "Analyze Writing Style"
+    },
+    {
+      "parameters": {
+        "jsCode": "const allItems = $('Analyze Writing Style').all();\nconst validItems = allItems.filter(item => !item.json.skipped);\n\nif (validItems.length === 0) return [{ json: { error: 'No valid emails to build profile from' } }];\n\nlet totalWordCount = 0, totalSentenceLength = 0, totalFormality = 0, totalEmojis = 0;\nlet emojiCount = 0, contractionCount = 0, formalClosingCount = 0, greetingCount = 0;\nconst tones = [], contentTypes = [], samples = [];\n\nfor (const item of validItems) {\n  const d = item.json;\n  totalWordCount += d.wordCount || 0;\n  totalSentenceLength += d.avgSentenceLength || 0;\n  totalFormality += d.formalityScore || 0;\n  totalEmojis += d.emojiCount || 0;\n  if (d.hasEmojis) emojiCount++;\n  if (d.usesContractions) contractionCount++;\n  if (d.hasFormalClosing) formalClosingCount++;\n  if (d.startsWithGreeting) greetingCount++;\n  if (d.tone) tones.push(d.tone);\n  if (d.contentType) contentTypes.push(d.contentType);\n  if (samples.length < 3 && d.cleanBody && d.cleanBody.length > 20) samples.push(d.cleanBody.substring(0, 300));\n}\n\nconst total = validItems.length;\nfunction mostCommon(arr) {\n  if (!arr.length) return 'conversational';\n  return arr.sort((a, b) => arr.filter(v => v === b).length - arr.filter(v => v === a).length)[0];\n}\n\nconst firstItem = validItems[0].json;\nconst userEmail = firstItem.from || '';\nconst userName = firstItem.fromName || userEmail.split('@')[0] || 'User';\n\nreturn [{ json: {\n  last_updated: new Date().toISOString(),\n  email: userEmail,\n  name: userName,\n  avg_word_count: Math.round(totalWordCount / total),\n  avg_sentence_length: Math.round((totalSentenceLength / total) * 10) / 10,\n  avg_formality: Math.round(totalFormality / total),\n  uses_emojis: emojiCount > total * 0.2 ? 'TRUE' : 'FALSE',\n  avg_emoji_count: Math.round((totalEmojis / total) * 10) / 10,\n  uses_contractions: contractionCount > total * 0.3 ? 'TRUE' : 'FALSE',\n  has_formal_closing: formalClosingCount > total * 0.5 ? 'TRUE' : 'FALSE',\n  starts_with_greeting: greetingCount > total * 0.5 ? 'TRUE' : 'FALSE',\n  most_common_tone: mostCommon(tones),\n  most_common_content_type: mostCommon(contentTypes),\n  sample_email_1: samples[0] || '',\n  sample_email_2: samples[1] || '',\n  sample_email_3: samples[2] || '',\n  total_emails_analyzed: total\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [736, 80],
+      "id": "5e63078d-f68d-4196-9c09-76c771f845d4",
+      "name": "Write Summary to Google Sheets"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_URL_HERE",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Profile",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "email": "={{ $json.email }}",
+            "name": "={{ $json.name }}",
+            "last_updated": "={{ $json.last_updated }}",
+            "avg_word_count": "={{ $json.avg_word_count }}",
+            "avg_sentence_length": "={{ $json.avg_sentence_length }}",
+            "avg_formality": "={{ $json.avg_formality }}",
+            "uses_emojis": "={{ $json.uses_emojis }}",
+            "avg_emoji_count": "={{ $json.avg_emoji_count }}",
+            "uses_contractions": "={{ $json.uses_contractions }}",
+            "has_formal_closing": "={{ $json.has_formal_closing }}",
+            "starts_with_greeting": "={{ $json.starts_with_greeting }}",
+            "most_common_tone": "={{ $json.most_common_tone }}",
+            "most_common_content_type": "={{ $json.most_common_content_type }}",
+            "sample_email_1": "={{ $json.sample_email_1 }}",
+            "sample_email_2": "={{ $json.sample_email_2 }}",
+            "sample_email_3": "={{ $json.sample_email_3 }}",
+            "total_emails_analyzed": "={{ $json.total_emails_analyzed }}"
+          },
+          "matchingColumns": ["email"]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [1008, 240],
+      "id": "0d72e658-4909-40d8-a460-949b60c199f4",
+      "name": "Append or update row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_URL_HERE",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Email ID": "={{ $json.emailId }}",
+            "Subject": "={{ $json.subject }}",
+            "Timestamp": "={{ $now.toISO() }}",
+            "Word Count": "={{ $json.wordCount }}",
+            "Avg Word Length": "={{ $json.avgWordLength }}",
+            "Sentence Count": "={{ $json.sentenceCount }}",
+            "Avg Sentence Length": "={{ $json.avgSentenceLength }}",
+            "Formality Score": "={{ $json.formalityScore }}",
+            "Content Type": "={{ $json.contentType }}",
+            "Has Emojis": "={{ $json.hasEmojis }}",
+            "Uses Contractions": "={{ $json.usesContractions }}",
+            "Starts With Greeting": "={{ $json.startsWithGreeting }}",
+            "Has Formal Closing": "={{ $json.hasFormalClosing }}",
+            "Date Sent": "={{ $json.date }}",
+            "Preview": "={{ $json.preview }}"
+          },
+          "matchingColumns": ["Email ID"]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [496, 240],
+      "id": "5edee391-8942-4045-b0b2-3b3a08b0d760",
+      "name": "Append or update row in sheet1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_URL_HERE",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Profile",
+          "mode": "list"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [-1136, 624],
+      "id": "e94f2d78-b6f5-407e-9ea4-1ae6cef8d26d",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{$json}}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [416, 480],
+      "id": "90ccc2f9-fad3-407f-942b-8c972f1a00d8",
+      "name": "HTTP Request",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_GROQ_CREDENTIAL_ID",
+          "name": "Header Auth account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputData = $input.first().json;\n\nreturn [{\n  json: {\n    model: \"llama-3.3-70b-versatile\",\n    messages: [\n      {\n        role: \"system\",\n        content: \"You are an email assistant. Match the user's writing style exactly. Be natural and professional.\"\n      },\n      {\n        role: \"user\",\n        content: inputData.prompt\n      }\n    ],\n    max_tokens: 500,\n    temperature: 0.7\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 608],
+      "id": "49228e9a-da44-43f2-87f4-cc02fa2de462",
+      "name": "Format for Groq"
+    },
+    {
+      "parameters": {
+        "jsCode": "const gmailData = $('Filter Email').first().json;\nconst from = gmailData.from || 'Unknown Sender';\nconst subject = gmailData.subject || 'No subject';\nconst body = gmailData.body || 'No content available';\nconst threadId = gmailData.threadId || '';\n\nlet senderFirstName = '', senderFullName = '';\nif (from.includes('<')) {\n  const namePart = from.split('<')[0].trim();\n  senderFullName = namePart;\n  senderFirstName = namePart.split(' ')[0];\n} else if (from.includes('@')) {\n  const emailPrefix = from.split('@')[0];\n  senderFirstName = emailPrefix.charAt(0).toUpperCase() + emailPrefix.slice(1);\n  senderFullName = senderFirstName;\n} else {\n  senderFirstName = from.split(' ')[0] || '';\n  senderFullName = from;\n}\n\nlet myName = 'User', myEmail = '', avgWordCount = 80, avgSentenceLength = 15;\nlet avgFormality = 6, hasEmojis = false, avgEmojiCount = 0, hasContractions = true;\nlet hasFormalClosing = true, startsWithGreeting = true, mostCommonTone = 'neutral';\nlet mostCommonType = 'conversational', sampleEmails = [], totalEmailsAnalyzed = 0;\n\ntry {\n  const profileRow = $('Get row(s) in sheet').first().json;\n  myEmail = profileRow.email || '';\n  myName = profileRow.name || myEmail.split('@')[0] || 'User';\n  avgWordCount = parseInt(profileRow.avg_word_count) || 80;\n  avgSentenceLength = parseFloat(profileRow.avg_sentence_length) || 15;\n  avgFormality = parseInt(profileRow.avg_formality) || 6;\n  hasEmojis = profileRow.uses_emojis === 'TRUE';\n  avgEmojiCount = parseFloat(profileRow.avg_emoji_count) || 0;\n  hasContractions = profileRow.uses_contractions === 'TRUE';\n  hasFormalClosing = profileRow.has_formal_closing === 'TRUE';\n  startsWithGreeting = profileRow.starts_with_greeting === 'TRUE';\n  mostCommonTone = profileRow.most_common_tone || 'neutral';\n  mostCommonType = profileRow.most_common_content_type || 'conversational';\n  totalEmailsAnalyzed = parseInt(profileRow.total_emails_analyzed) || 0;\n  if (profileRow.sample_email_1) sampleEmails.push(profileRow.sample_email_1);\n  if (profileRow.sample_email_2) sampleEmails.push(profileRow.sample_email_2);\n  if (profileRow.sample_email_3) sampleEmails.push(profileRow.sample_email_3);\n} catch (error) {\n  console.log('Could not load profile, using defaults');\n}\n\nmyName = myName.charAt(0).toUpperCase() + myName.slice(1);\nconst userFirstName = myName.split(' ')[0];\n\nfunction analyzeIncomingEmail(subjectText, bodyText) {\n  const combined = (subjectText + ' ' + bodyText).toLowerCase();\n  const isUrgent = ['urgent', 'asap', 'immediately', 'deadline'].some(w => combined.includes(w));\n  const hasQuestion = bodyText.includes('?') || combined.includes('could you') || combined.includes('can you');\n  const casualCount = ['hi', 'hey', 'thanks', \"i'm\", '!'].filter(m => combined.includes(m)).length;\n  const formalCount = ['dear', 'regards', 'sincerely', 'kindly'].filter(m => combined.includes(m)).length;\n  let senderFormality = 'neutral';\n  if (formalCount > casualCount + 1) senderFormality = 'formal';\n  else if (casualCount > formalCount + 1) senderFormality = 'casual';\n  const hasGratitude = ['thank', 'thanks', 'appreciate'].some(w => combined.includes(w));\n  const hasComplaint = ['disappointed', 'problem', 'issue', 'concern'].some(w => combined.includes(w));\n  let emotionalTone = 'neutral';\n  if (hasGratitude) emotionalTone = 'grateful';\n  if (hasComplaint) emotionalTone = 'complaint';\n  const wordCount = bodyText.split(/\\s+/).length;\n  const isShort = wordCount < 30;\n  const hasDelayMention = ['late', 'delay', 'waiting', 'follow up'].some(i => combined.includes(i));\n  return { isUrgent, hasQuestion, senderFormality, emotionalTone, isShort, wordCount, hasDelayMention };\n}\n\nconst emailContext = analyzeIncomingEmail(subject, body);\nconst incomingTextSample = (subject + ' ' + body).substring(0, 600);\n\nconst prompt = `You are ${myName} (${myEmail}) replying to an email from ${senderFullName || senderFirstName}.\n\nINCOMING EMAIL:\nFrom: ${from}\nSubject: \"${subject}\"\nMessage: \"${body}\"\n\nCONTEXT:\n- Urgency: ${emailContext.isUrgent ? 'HIGH' : 'Normal'}\n- Type: ${emailContext.hasQuestion ? 'Question/Request' : 'Statement/Update'}\n- Sender tone: ${emailContext.senderFormality} / ${emailContext.emotionalTone}\n- Length: ${emailContext.isShort ? 'Short — keep reply brief' : 'Detailed'}\n\nYOUR WRITING STYLE (from ${totalEmailsAnalyzed} analyzed emails):\n- Length: ~${avgWordCount} words\n- Formality: ${avgFormality}/10\n- Emojis: ${hasEmojis ? `yes (avg ${avgEmojiCount}/email)` : 'no'}\n- Contractions: ${hasContractions ? 'yes' : 'no'}\n- Greeting: ${startsWithGreeting ? 'always greets' : 'sometimes skips'}\n- Closing: ${hasFormalClosing ? 'formal closing' : 'casual sign-off'}\n- Tone: ${mostCommonTone}\n\n${sampleEmails.length > 0 ? `EXAMPLES OF YOUR WRITING:\n${sampleEmails.map((s, i) => `Example ${i+1}: \"${s}\"`).join('\\n')}` : ''}\n\nLANGUAGE RULE: Detect the language of the incoming email and reply in THAT EXACT SAME language.\n\nWrite the reply now. Structure: greeting → answer → closing → sign as \"${userFirstName}\"\nOUTPUT: Only the reply. No subject line, no explanations.`;\n\nreturn [{\n  json: {\n    prompt,\n    original_subject: subject,\n    original_from: from,\n    original_body: body,\n    thread_id: threadId,\n    sender_name: senderFirstName,\n    context: emailContext,\n    detected_user_name: myName,\n    detected_user_email: myEmail,\n    style_source: `Profile — ${totalEmailsAnalyzed} emails`\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [48, 480],
+      "id": "9b71431a-fa1b-4e04-b700-96d95dbda1e6",
+      "name": "Build Personalized Prompt"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $('Gmail Trigger').all();\n\nconst results = items.map(item => {\n  const data = item.json;\n  const fromEmail = data.from?.value?.[0]?.address || '';\n  const fromName = data.from?.value?.[0]?.name || '';\n  const subject = data.subject || '';\n  const body = data.snippet || data.bodyPlainText || data.text || '';\n  const threadId = data.threadId || data.id || '';\n  const labelIds = data.labelIds || [];\n\n  const hasPromotionalLabel = labelIds.some(label =>\n    ['CATEGORY_PROMOTIONS','CATEGORY_SOCIAL','CATEGORY_UPDATES','CATEGORY_FORUMS'].includes(label)\n  );\n  if (hasPromotionalLabel) return { json: { action: 'SKIPPED', reason: 'Promotional category', from: fromEmail, subject } };\n\n  const skipPatterns = ['no-reply','noreply','donotreply','notifications@','notify@','alerts@','newsletter@','marketing@'];\n  if (skipPatterns.some(p => fromEmail.toLowerCase().includes(p))) return { json: { action: 'SKIPPED', reason: 'Automated sender', from: fromEmail } };\n\n  const promoKeywords = ['unsubscribe','newsletter','promotion','deal','offer','discount','sale'];\n  if (promoKeywords.some(k => subject.toLowerCase().includes(k))) return { json: { action: 'SKIPPED', reason: 'Promotional subject', subject } };\n\n  if (!fromEmail) return { json: { action: 'SKIPPED', reason: 'Missing sender' } };\n\n  return { json: { action: 'CONTINUE', threadId, from: fromEmail, fromName, subject, body, labelIds } };\n});\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-928, 512],
+      "id": "84e2b34f-bc13-460f-88f8-9b29d9a51c5b",
+      "name": "Filter Email"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "strict", "version": 3 },
+          "conditions": [{ "id": "bb68b682-916c-4773-988f-35114b42afe2", "leftValue": "={{ $json.action }}", "rightValue": "CONTINUE", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-176, 592],
+      "id": "9a598a8d-c499-4766-9355-b696f58a35aa",
+      "name": "Check if Should Reply"
+    },
+    {
+      "parameters": {
+        "pollTimes": { "item": [{ "mode": "everyMinute" }] },
+        "simple": false,
+        "filters": { "labelIds": ["INBOX"], "readStatus": "unread" },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.3,
+      "position": [-1376, 512],
+      "id": "074dd662-21df-4d50-b017-8f36ccb84325",
+      "name": "Gmail Trigger",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $('Filter Email').first().json.subject }}",
+        "message": "={{ $('decode html entities1').first().json.reply_body }}",
+        "options": {
+          "replyTo": "={{ $('Filter Email').first().json.from }}",
+          "threadId": "={{ $('Build Personalized Prompt').first().json.thread_id }}",
+          "sendTo": "={{ $('Filter Email').first().json.from }}"
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [1648, 688],
+      "id": "fe7d2063-26e3-4bf8-bf18-48c4361cc067",
+      "name": "Create a draft1",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "YOUR_GMAIL_CREDENTIAL_ID",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const groqResponse = $('HTTP Request').first().json;\nlet replyText = groqResponse.choices?.[0]?.message?.content || '';\n\nfunction decodeHTMLEntities(text) {\n  const entities = { '&#39;': \"'\", '&apos;': \"'\", '&quot;': '\"', '&amp;': '&', '&lt;': '<', '&gt;': '>', '&nbsp;': ' ', '&#233;': 'é', '&#232;': 'è', '&#234;': 'ê', '&#244;': 'ô', '&#231;': 'ç', '&#224;': 'à', '&#249;': 'ù' };\n  let decoded = text;\n  for (const [entity, char] of Object.entries(entities)) decoded = decoded.split(entity).join(char);\n  decoded = decoded.replace(/&#(\\d+);/g, (_, dec) => String.fromCharCode(dec));\n  decoded = decoded.replace(/&#x([0-9A-Fa-f]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));\n  return decoded;\n}\n\nconst cleanedReply = decodeHTMLEntities(replyText);\n\nreturn [{\n  json: {\n    reply_body: cleanedReply,\n    original_response: replyText,\n    thread_id: $('Build Personalized Prompt').first().json.thread_id || '',\n    subject: $('Build Personalized Prompt').first().json.original_subject || ''\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [688, 608],
+      "id": "05f1e7b0-a632-41a1-976a-5f4460f8568b",
+      "name": "decode html entities1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || \"\";\n\nconst injectionPatterns = [\n  /ignore previous instructions/i,\n  /disregard.*instructions/i,\n  /you are now/i,\n  /act as/i,\n  /new persona/i,\n  /forget.*instructions/i,\n  /system prompt/i,\n  /\\[INST\\]/i,\n  /<\\|.*\\|>/i\n];\n\nconst isSuspicious = injectionPatterns.some(p => p.test(body));\n\nreturn [{ json: { ...$input.first().json, skip: isSuspicious } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-640, 608],
+      "id": "71637698-338e-4a57-8201-ff1ec0881dfa",
+      "name": "Injection Guard"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose", "version": 3 },
+          "conditions": [{ "id": "a84767a6-f75c-48ca-a877-288106bcb145", "leftValue": "={{ $json.skip.toString() }}", "rightValue": "false", "operator": { "type": "string", "operation": "equals" } }],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [-432, 480],
+      "id": "73d7f53c-4d2b-4d8c-8483-117022b0f730",
+      "name": "Is Safe Email?"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "months", "triggerAtDayOfMonth": 22, "triggerAtHour": 17, "triggerAtMinute": 2 }]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [-480, 224],
+      "id": "ff849fa5-2527-410f-8f27-dd25a70ba266",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto = require('crypto');\n\n// ⚠️ Replace with your own 32-byte hex key (set in environment or n8n credentials)\nconst KEY = process.env.ENCRYPTION_KEY || 'REPLACE_WITH_YOUR_32_BYTE_HEX_KEY';\n\nfunction encrypt(text) {\n  if (!text) return null;\n  const iv = crypto.randomBytes(12);\n  const cipher = crypto.createCipheriv('aes-256-gcm', Buffer.from(KEY, 'hex'), iv);\n  let encrypted = cipher.update(String(text), 'utf8', 'hex');\n  encrypted += cipher.final('hex');\n  const authTag = cipher.getAuthTag().toString('hex');\n  const ivHex = Array.from(iv).map(b => b.toString(16).padStart(2, '0')).join('');\n  return `${ivHex}:${authTag}:${encrypted}`;\n}\n\nfunction sanitize(text, maxLen = 300) {\n  if (!text) return '';\n  return String(text).replace(/<[^>]*>/g, '').replace(/[\\x00-\\x1F]/g, '').trim().substring(0, maxLen);\n}\n\nconst item = $input.item.json;\n\nreturn {\n  sender_email: encrypt(item.from || item.sender_email),\n  sender_name: encrypt(item.sender_name || item.name),\n  email_body: encrypt(item.body || item.draft || item.text),\n  subject: sanitize(item.subject, 200),\n  status: item.status || 'processed',\n  validated: item.validated,\n  validated_at: item.validated_at,\n  processed_at: new Date().toISOString()\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1168, 624],
+      "id": "7070d58e-72d2-411f-9220-6cdfbfffc45d",
+      "name": "Encrypt and Sanitize PII"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const item = $input.item.json;\n\nconst content = item.reply_body || item.original_response || item.text || item.body;\nif (!content) throw new Error('[Output Validator] No content to validate');\n\nconst errors = [];\n\nconst urlPattern = /https?:\\/\\/(?!mail\\.google\\.com|accounts\\.google\\.com)[^\\s\"'<>]+/gi;\nconst suspiciousUrls = content.match(urlPattern) || [];\nif (suspiciousUrls.length > 0) errors.push(`Suspicious URLs detected: ${suspiciousUrls.join(', ')}`);\n\nconst scriptPattern = /<script[\\s\\S]*?>[\\s\\S]*?<\\/script>|javascript:|on\\w+\\s*=/gi;\nif (scriptPattern.test(content)) errors.push('Script injection detected in AI response');\n\nconst leakagePatterns = [/you are an ai/i, /as an ai language model/i, /my instructions are/i, /system prompt/i, /ignore previous/i];\nfor (const pattern of leakagePatterns) {\n  if (pattern.test(content)) { errors.push('Prompt leakage detected'); break; }\n}\n\nif (content.length > 5000) errors.push(`Response too long: ${content.length} chars`);\nif (content.trim().length < 10) errors.push('Response too short');\n\nif (errors.length > 0) throw new Error(`[Output Validator] Blocked: ${errors.join(' | ')}`);\n\nreturn { ...item, validated: true, validated_at: new Date().toISOString() };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [928, 464],
+      "id": "87c585ed-d4fb-4457-bfeb-b523bf108bcb",
+      "name": "Output Validator"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const crypto = require('crypto');\n\n// ⚠️ Replace with your own 32-byte hex key (set in environment or n8n credentials)\nconst SECRET_KEY = process.env.HASH_SECRET || 'REPLACE_WITH_YOUR_32_BYTE_HEX_KEY';\n\nconst item = $input.item.json;\nconst content = item.email_body || item.reply_body || item.subject || '';\nif (!content) throw new Error('[Hash & Sign] No content found to sign');\n\nconst payload = JSON.stringify({\n  content: content.trim(),\n  sender_email: item.sender_email || '',\n  draft_id: item.message?.id || item.id || '',\n  timestamp: new Date().toISOString()\n});\n\nconst signature = crypto.createHmac('sha256', SECRET_KEY).update(payload).digest('hex');\nconst payload_hash = crypto.createHash('sha256').update(payload).digest('hex');\n\nreturn {\n  ...item,\n  draft_id: item.message?.id || item.id || '',\n  thread_id: item.message?.threadId || '',\n  _integrity: { signature, payload_hash, signed_at: new Date().toISOString(), algorithm: 'hmac-sha256' }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1824, 416],
+      "id": "a4996962-596b-4db1-b378-570d119320c0",
+      "name": "Hash and Sign"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [1488, 416],
+      "id": "a0011a43-f35e-461d-9341-1c01aee0b3f3",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_AUDIT_LOG_SHEET_URL_HERE",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Feuille1",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [2160, 416],
+      "id": "7a29de73-a14c-465c-841e-778705ea101c",
+      "name": "Append or update row in sheet2",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "YOUR_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Get many messages": { "main": [[{ "node": "Extract Content", "type": "main", "index": 0 }]] },
+    "Extract Content": { "main": [[{ "node": "Analyze Writing Style", "type": "main", "index": 0 }]] },
+    "Analyze Writing Style": { "main": [[{ "node": "Append or update row in sheet1", "type": "main", "index": 0 }]] },
+    "Write Summary to Google Sheets": { "main": [[{ "node": "Append or update row in sheet", "type": "main", "index": 0 }]] },
+    "Append or update row in sheet1": { "main": [[{ "node": "Write Summary to Google Sheets", "type": "main", "index": 0 }]] },
+    "Get row(s) in sheet": { "main": [[{ "node": "Filter Email", "type": "main", "index": 0 }]] },
+    "Format for Groq": { "main": [[{ "node": "HTTP Request", "type": "main", "index": 0 }]] },
+    "Build Personalized Prompt": { "main": [[{ "node": "Format for Groq", "type": "main", "index": 0 }]] },
+    "HTTP Request": { "main": [[{ "node": "decode html entities1", "type": "main", "index": 0 }]] },
+    "Filter Email": { "main": [[{ "node": "Injection Guard", "type": "main", "index": 0 }]] },
+    "Check if Should Reply": { "main": [[{ "node": "Build Personalized Prompt", "type": "main", "index": 0 }]] },
+    "Gmail Trigger": { "main": [[{ "node": "Get row(s) in sheet", "type": "main", "index": 0 }]] },
+    "Create a draft1": { "main": [[{ "node": "Merge", "type": "main", "index": 1 }]] },
+    "decode html entities1": { "main": [[{ "node": "Output Validator", "type": "main", "index": 0 }]] },
+    "Injection Guard": { "main": [[{ "node": "Is Safe Email?", "type": "main", "index": 0 }]] },
+    "Is Safe Email?": { "main": [[{ "node": "Check if Should Reply", "type": "main", "index": 0 }]] },
+    "Schedule Trigger": { "main": [[{ "node": "Get many messages", "type": "main", "index": 0 }]] },
+    "Encrypt and Sanitize PII": { "main": [[{ "node": "Merge", "type": "main", "index": 0 }, { "node": "Create a draft1", "type": "main", "index": 0 }]] },
+    "Output Validator": { "main": [[{ "node": "Encrypt and Sanitize PII", "type": "main", "index": 0 }]] },
+    "Merge": { "main": [[{ "node": "Hash and Sign", "type": "main", "index": 0 }]] },
+    "Hash and Sign": { "main": [[{ "node": "Append or update row in sheet2", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "tags": []
+}
