@@ -221,7 +221,7 @@ MIT License © 2026 Assia Bendaou & Douae Annasri
 ## Contact
 
 - GitHub: https://github.com/ASSIABD/email_assistant
-- Email: bendaouassia@gmail.com
+- Email: bendaouassia@gmail.com & annasridouae3@gmail.com
 
 ---
 
