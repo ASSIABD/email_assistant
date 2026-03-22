@@ -1,146 +1,168 @@
 # AI Email Assistant with Personalized Style Learning
 
-**AgorAI Hackathon 2026 - Hackonauts Team**
-
-Authors: Assia Bendaou & Douae Annasri
+**AgorAI Spring School 2026 — Hackonauts Team**  
+Authors: Assia Bendaou & Douae Annasri | ENSIASD Taroudant
 
 ---
 
-## Problem Statement
+## What is it?
 
-Generic AI assistants send robotic emails that don't sound personal. Manual email writing takes 10-15 minutes per message. Companies need human oversight for compliance before sending emails.
+An AI email assistant that learns how **you** write and drafts replies in your exact voice — not a generic AI voice. Built with a multi-layer security pipeline and strict human-in-the-loop control.
 
-Our solution: An AI assistant that learns YOUR unique writing style and generates personalized email drafts with cryptographic security audit trails.
+---
+
+## The Problem
+
+Professionals spend **28% of their workweek** on email. Existing AI tools generate responses that sound robotic and impersonal. No tool learns your unique writing style.
 
 ---
 
 ## Key Features
 
 **Personalization Engine**
-- Learns individual writing style from past emails
-- Adapts tone, length, and emoji usage
-- Maintains your personal voice
+- Analyzes your last 25 sent emails
+- Extracts 17 linguistic metrics: tone, formality, sentence length, emoji usage, contractions, greeting patterns and more
+- Injects 3 real samples of your writing into every prompt (few-shot learning)
+- Builds a personal style profile stored in Google Sheets
+- Updates automatically on schedule
 
-**Security-First Design**
-- Cryptographic hash chains for audit trails
-- Append-only logs (tamper-proof)
-- Human-in-the-loop approval required
-- Privacy-preserving (no content storage)
+**Security Pipeline (5 layers)**
+- Prompt Injection Guard — scans every incoming email for malicious instructions
+- Output Validator — blocks suspicious URLs, scripts, and prompt leakage
+- AES-256-GCM Encryption — encrypts sender name, email, and body before storage
+- HMAC-SHA256 Signing — digitally signs every processed email
+- Append-Only Audit Log — immutable record in Google Sheets
 
-**Real-Time Automation**
-- Draft generation in under 3 seconds
-- Automatic spam filtering
-- Multi-language detection
+**Human-in-the-Loop**
+- AI drafts, you decide
+- Nothing is ever sent automatically
+- 100% human approval rate by design
 
----
-
-## Results
-
-**Time Savings**
-- Manual writing: 10-15 minutes per email
-- AI generation: 2-3 seconds
-- Result: 95% time reduction
-
-**Style Accuracy**
-- 87% similarity to personal writing style
-- Learns from 10+ past emails
-- Adapts to formality levels (5-8/10 scale)
-
-**Security**
-- 100% human approval rate (zero auto-sends)
-- Cryptographic audit logs for every draft
-- Immutable event tracking
+**Performance**
+- Draft generated in < 2 seconds
+- Any language, auto-detected
+- 70B parameter AI model (Groq llama-3.3-70b-versatile)
 
 ---
 
 ## System Architecture
 
-**Workflow 1: Style Learning (One-time setup)**
+**Workflow 1 — Style Learner** *(runs on schedule)*
 ```
-Manual Trigger → Gmail API (fetch sent emails)
+Schedule Trigger → Gmail API (fetch 25 sent emails)
     ↓
-Extract content and metadata
+Extract Content
     ↓
-Analyze writing patterns (word count, formality, emojis)
+Analyze 17 Style Metrics
     ↓
-Store style profile in Google Sheets
+Append/Update Email Row (Sheet1, matched by Email ID)
+    ↓
+Write Summary Row → Profile Sheet (17 columns)
 ```
 
-**Workflow 2: Draft Generation (Automated)**
+**Workflow 2 — Draft Generator** *(triggers on new email)*
 ```
-New email arrives → Gmail Trigger
+Gmail Trigger → Get Style Profile from Sheets
     ↓
-Load user style profile from Google Sheets
+Filter Email
     ↓
-Filter spam/promotional emails
+Injection Guard
     ↓
-Build personalized prompt with context
+Is Safe? → No: Silent Drop | Yes: Continue
     ↓
-Call Groq AI API for generation
+Check if Reply Needed
     ↓
-Decode HTML entities
+Build Personalized Prompt (+ 3 sample emails)
     ↓
-Create Gmail draft (NOT sent automatically)
+Groq AI API (llama-3.3-70b-versatile)
     ↓
-Log security event with cryptographic hash
+Decode HTML Entities
     ↓
-Human reviews and approves before sending
+Output Validator
+    ↓
+Encrypt & Sanitize PII (AES-256-GCM)
+    ↓
+Create Gmail Draft
+    ↓
+Merge → Hash & Sign (HMAC-SHA256)
+    ↓
+Append-Only Audit Log (Google Sheets)
 ```
 
 ---
 
 ## Technology Stack
 
-- **n8n**: Workflow automation orchestration
-- **Groq AI API**: Large language model for text generation
-- **Gmail API**: Email input/output integration
-- **Google Sheets**: Style database storage
-- **Cryptographic Hashing**: SHA-256 for security logs
-- **Digital Signatures**: RSA for audit trail verification
+| Tool | Role |
+|---|---|
+| n8n | Low-code workflow automation |
+| Groq AI | llama-3.3-70b-versatile inference |
+| Gmail API | Email input & draft creation |
+| Google Sheets | Style profile & audit log storage |
+| AES-256-GCM | PII encryption |
+| HMAC-SHA256 | Tamper-proof digital signing |
 
 ---
 
-## Style Learning Metrics
+## Style Profile — 17 Metrics
 
-The system analyzes your past emails to extract:
-
-- Average word count per email
-- Average sentence length
-- Formality score (0-10 scale)
-- Emoji usage frequency
-- Common greeting patterns
-- Typical closing phrases
-- Language detection
-
-Example metrics from our tests:
-- Word count: 39-83 words (average: 60)
-- Formality: 5-8 out of 10
-- Emoji usage: 33% of emails
-- Sentence count: 3-6 sentences
+avg_word_count · avg_sentence_length · avg_formality · uses_emojis · uses_contractions · most_common_tone · most_common_content_type · sample_email_1 · sample_email_2 · sample_email_3 · total_emails_analyzed · greeting_style · closing_style · avg_paragraph_count · punctuation_style · response_length_preference · language
 
 ---
 
-## Security Features
+## Security — Audit Log Schema
 
-**Cryptographic Audit Trail**
+| Column | Content |
+|---|---|
+| draft_id | Gmail draft ID |
+| thread_id | Gmail thread ID |
+| sender_email | AES-256-GCM encrypted |
+| sender_name | AES-256-GCM encrypted |
+| subject | Sanitized plain text |
+| status | Processing status |
+| signature | HMAC-SHA256 signature |
+| payload_hash | SHA256 hash of full payload |
+| signed_at | Signing timestamp |
+| processed_at | Processing timestamp |
 
-Every draft creation generates a security event:
-- Event type: AI_DRAFT_CREATED
-- Email ID: Unique draft identifier
-- Timestamp: ISO 8601 format
-- Hash: SHA-256 of event data
-- Signature: RSA digital signature
+---
 
-When user saves/sends the draft:
-- Event type: DRAFT_SAVED
-- Links to original AI_DRAFT_CREATED event
-- Creates immutable chain of custody
+## Installation & Setup
 
-**Privacy Protection**
-- Only metadata is logged (no email content)
-- All content stays in Gmail
-- No data leaves Google workspace
-- Logs are append-only (cannot be modified or deleted)
+**Prerequisites**
+- n8n instance (self-hosted or cloud)
+- Gmail account with API access
+- Google Sheets API credentials
+- Groq AI API key
+
+**Step 1: Configure environment**
+
+Copy `.env.example` and fill in your values:
+```
+ENCRYPTION_KEY=your_32_byte_hex_key_here
+HASH_SECRET=your_32_byte_hex_key_here
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+**Step 2: Import Workflows**
+1. Open n8n → Import from File
+2. Import `workflows/workflow_1_style_learner.json`
+3. Import `workflows/workflow_2_draft_generator.json`
+
+**Step 3: Configure Credentials in n8n**
+- Gmail OAuth2
+- Google Sheets OAuth2
+- Groq API key (HTTP Header Auth)
+
+**Step 4: Run Style Learner**
+- Activate Workflow 1
+- It will run on schedule automatically
+- Check your Profile sheet to confirm data is populated
+
+**Step 5: Enable Draft Generator**
+- Activate Workflow 2
+- New incoming emails will trigger automatic draft creation
+- Review drafts in Gmail before sending
 
 ---
 
@@ -148,212 +170,56 @@ When user saves/sends the draft:
 ```
 email_assistant/
 ├── workflows/
-│   ├── style_extraction.json       # n8n workflow for learning style
-│   ├── draft_generation.json       # n8n workflow for creating drafts
+│   ├── workflow_1_style_learner.json
+│   ├── workflow_2_draft_generator.json
 ├── docs/
-│   ├── poster.pdf                  # Hackathon submission poster
-│   ├── architecture_diagram.png    # System overview
-│   ├── security_log_example.png    # Audit trail screenshot
+│   ├── architecture_diagram.png
+│   ├── poster.pdf
 ├── examples/
-│   ├── email_received.txt          # Sample incoming email
-│   ├── ai_draft_generated.txt      # Sample AI output
-│   ├── security_log.json           # Security event example
-├── docker-compose.example.yml      # n8n deployment configuration
+│   ├── email_received.txt
+│   ├── ai_draft_generated.txt
+│   ├── security_log.json
+├── .env.example
+├── docker-compose.yml
 ├── .gitignore
 └── README.md
 ```
 
 ---
 
-## Installation and Setup
-
-**Prerequisites**
-- n8n instance (self-hosted or cloud)
-- Gmail account with API access enabled
-- Google Sheets API credentials
-- Groq AI API key
-
-**Step 1: Import Workflows**
-1. Download workflow JSON files from workflows/ folder
-2. Open n8n interface
-3. Click "Import from File"
-4. Select each workflow file
-
-**Step 2: Configure Credentials**
-1. Gmail OAuth2 credentials
-2. Google Sheets API access
-3. Groq AI API key
-4. RSA key pair for signatures (optional)
-
-**Step 3: Run Style Extraction**
-1. Activate "Style Extraction" workflow
-2. Click "Execute Workflow"
-3. System fetches your sent emails
-4. Style profile saved to Google Sheets
-
-**Step 4: Enable Draft Generation**
-1. Activate "Draft Generation" workflow
-2. Set Gmail trigger to monitor inbox
-3. System automatically creates drafts for new emails
-4. Review and approve drafts in Gmail
-
----
-
-## Usage Example
-
-**Incoming Email:**
-```
-Subject: demande de clarification
-
-Bonsoir,
-
-Je me permits de vous contacter afin d'obtenir quelques précisions 
-concernant les attentes liées à la démonstration du projet. 
-Je souhaite m'assurer que ma préparation correspond bien aux 
-exigences demandées.
-
-Je vous remercie par avance.
-
-Cordialement,
-ASSIA
-```
-
-**AI-Generated Draft (matching user's style):**
-```
-Bonjour Notsophie18,
-
-Je vous remercie pour votre demande d'accès au Code212. 
-Votre demande a bien été prise en compte et je vous informe 
-que vous pouvez désormais accéder au Code212 au sein de 
-l'établissement pour vos activités académiques.
-
-Si vous avez besoin de tout autre renseignement, n'hésitez 
-pas à me contacter.
-
-Cordialement,
-Assiabd2004
-```
-
-**Security Log Generated:**
-```json
-{
-  "event": "AI_DRAFT_CREATED",
-  "email_id": "19c633b8bc00b85a",
-  "timestamp": "2026-02-15T22:30:58.378Z",
-  "hash": "90c331fd5e398264c3cbfcc1691c30ce1ce8389163c80f1e02dc656d1cf716c6",
-  "signature": "H+QWgef5GleS87EnmlnQ3nAEmvvTPelve0N8z9LQA3sVmXdV..."
-}
-```
-
----
-
-## Future Roadmap
-
-**Multi-Language Support**
-- Extend style learning 
-- Language-specific tone adaptation
-
-**Sentiment Analysis**
-- Detect urgency levels in incoming emails
-- Adjust response tone accordingly
-
-**Calendar Integration**
-- Automatically propose meeting times
-- Sync with Google Calendar availability
-
-**Team Profiles**
-- Enterprise deployment with shared style databases
-- Role-based draft generation (support, sales, management)
-
-**Advanced Security**
-- Blockchain-based audit trails
-- Multi-signature approval workflows
-- Compliance reporting dashboards
-
----
-
-## Hackathon Submission Details
-
-**Event:** AgorAI Spring School 2026
-
-**Team:** Hackonauts
-- Assia Bendaou
-- Douae Annasri
-
-**Institution:** École Nationale Supérieure d'Intelligence Artificielle et Sciences des Données - Taroudant
-
-**Category:** AI-Powered Productivity Tools
-
-**Submission Date:** February 15, 2026
-
----
-
-## Technical Specifications
-
-**n8n Workflows**
-- Total nodes: 15+ per workflow
-- Execution time: 2-3 seconds average
-- Error handling: Retry logic with exponential backoff
-
-**AI Model**
-- Provider: Groq AI
-- Model: Llama or Mixtral (configurable)
-- Max tokens: 1000
-- Temperature: 0.7
-
-**Data Storage**
-- Style metrics: Google Sheets
-- Security logs: Google Sheets (append-only)
-- Email drafts: Gmail API
-
-**Security**
-- Hashing algorithm: SHA-256
-- Signature algorithm: RSA-2048
-- Timestamp format: ISO 8601 UTC
-
----
-
-## Performance Metrics
-
-**Style Learning Phase**
-- Emails analyzed: 10-50 per user
-- Processing time: 30-60 seconds
-- Accuracy: 87% style similarity
-
-**Draft Generation Phase**
-- Average response time: 2.5 seconds
-- Success rate: 98% (2% filtered as spam)
-- Human approval rate: 100%
-
-**Security Logging**
-- Log generation time: <100ms
-- Storage overhead: <1KB per event
-- Verification time: <50ms
-
----
-
 ## Known Limitations
 
-- Requires minimum 10 sent emails for style learning
-- Works best with conversational email styles
-- May need manual adjustment for highly technical content
-- Currently supports Gmail only (other providers planned)
+- Requires minimum 25 sent emails for accurate style learning
+- Currently supports Gmail only
+- Credentials must be configured manually per user
+
+---
+
+## Future Work
+
+- RAG integration with company-specific data
+- Feedback loop to learn from your edits
+- Multi-user team support
+
+---
+
+## Hackathon Details
+
+**Event:** AgorAI Spring School 2026  
+**Team:** Hackonauts — Assia Bendaou & Douae Annasri  
+**Institution:** ENSIASD Taroudant  
+**Category:** AI-Powered Productivity Tools
 
 ---
 
 ## License
 
-MIT License
-
-Copyright (c) 2026 Assia Bendaou & Douae Annasri
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software.
+MIT License © 2026 Assia Bendaou & Douae Annasri
 
 ---
 
 ## Contact
 
-For questions or collaboration opportunities:
 - GitHub: https://github.com/ASSIABD/email_assistant
 - Email: bendaouassia@gmail.com
 
@@ -361,7 +227,4 @@ For questions or collaboration opportunities:
 
 ## Acknowledgments
 
-- AgorAI Spring School 2026 organizing committee
-- ENSIASD
-- n8n community for workflow automation tools
-- Groq AI for fast inference API
+AgorAI Spring School 2026 · ENSIASD · n8n Community · Groq AI
